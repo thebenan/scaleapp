@@ -133,14 +133,59 @@ scaleBtn.addEventListener("click", () => {
 });
 
 
+// Predefined measurement units
+const measurementUnits = [
+  { value: '', text: 'Select unit' },
+  // Weight units
+  { value: 'g', text: 'g (grams)' },
+  { value: 'kg', text: 'kg (kilograms)' },
+  { value: 'oz', text: 'oz (ounces)' },
+  { value: 'lb', text: 'lb (pounds)' },
+  { value: 'lbs', text: 'lbs (pounds)' },
+  // Volume units
+  { value: 'ml', text: 'ml (milliliters)' },
+  { value: 'l', text: 'l (liters)' },
+  { value: 'tsp', text: 'tsp (teaspoon)' },
+  { value: 'tbsp', text: 'tbsp (tablespoon)' },
+  { value: 'cup', text: 'cup' },
+  { value: 'fl oz', text: 'fl oz (fluid ounces)' },
+  { value: 'pint', text: 'pint' },
+  { value: 'quart', text: 'quart' },
+  { value: 'gallon', text: 'gallon' },
+  // Count units
+  { value: 'pcs', text: 'pcs (pieces)' },
+  { value: 'whole', text: 'whole' },
+  { value: 'dozen', text: 'dozen' },
+  // Length units
+  { value: 'cm', text: 'cm (centimeters)' },
+  { value: 'inch', text: 'inch' },
+  // Other units
+  { value: 'pinch', text: 'pinch' },
+  { value: 'dash', text: 'dash' },
+  { value: 'slice', text: 'slice' },
+  { value: 'clove', text: 'clove' },
+  { value: 'can', text: 'can' },
+  { value: 'bottle', text: 'bottle' },
+  { value: 'package', text: 'package' },
+  { value: 'bag', text: 'bag' }
+];
+
 // Add ingredient field logic
 function addIngredientField(ingredient = { name: '', amount: '', unit: '' }) {
   const div = document.createElement('div');
   div.className = 'input-group mb-2 ingredient-row';
+  
+  // Create the unit dropdown options
+  const unitOptions = measurementUnits.map(unit => 
+    `<option value="${unit.value}" ${unit.value === (ingredient.unit || '') ? 'selected' : ''}>${unit.text}</option>`
+  ).join('');
+  
   div.innerHTML = `
     <input type="text" class="form-control ingredient-name" placeholder="Name" value="${ingredient.name || ''}">
     <input type="number" class="form-control ingredient-amount" placeholder="Amount" value="${ingredient.amount || ''}" min="0" step="any">
-    <input type="text" class="form-control ingredient-unit" placeholder="Unit" value="${ingredient.unit || ''}">
+    <select class="form-select ingredient-unit" style="max-width: 150px;">
+      ${unitOptions}
+    </select>
     <button type="button" class="btn btn-outline-danger remove-ingredient-btn">&times;</button>
   `;
   div.querySelector('.remove-ingredient-btn').onclick = () => div.remove();
@@ -179,7 +224,7 @@ saveRecipeBtn.addEventListener("click", () => {
   const ingredients = Array.from(ingredientRows).map(row => {
     const name = row.querySelector('.ingredient-name').value.trim();
     const amount = parseFloat(row.querySelector('.ingredient-amount').value);
-    const unit = row.querySelector('.ingredient-unit').value.trim();
+    const unit = row.querySelector('.ingredient-unit').value; // This now gets value from select element
     return { name, amount: isNaN(amount) ? 0 : amount, unit };
   }).filter(ing => ing.name);
 
