@@ -33,7 +33,7 @@ const saveRecipeBtn = document.getElementById("saveRecipeBtn");
 const deleteRecipeName = document.getElementById("deleteRecipeName");
 const confirmDeleteBtn = document.getElementById("confirmDeleteBtn");
 
-// Register Service Worker only if protocol is http(s) or localhost
+// Register Service Worker with update detection
 if (
   "serviceWorker" in navigator &&
   (location.protocol === "https:" ||
@@ -42,7 +42,43 @@ if (
     location.hostname === "127.0.0.1")
 ) {
   navigator.serviceWorker.register("/sw.js")
-    .then(() => console.log("Service Worker registered"));
+    .then(registration => {
+      console.log("Service Worker registered");
+      
+      // Check for updates every 60 seconds
+      setInterval(() => {
+        registration.update();
+      }, 60000);
+      
+      // Listen for new service worker taking control
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        console.log('New service worker activated, reloading...');
+        window.location.reload();
+      });
+      
+      // Handle service worker updates
+      registration.addEventListener('updatefound', () => {
+        const newWorker = registration.installing;
+        if (newWorker) {
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              // New content available, show update notification
+              showUpdateNotification();
+            }
+          });
+        }
+      });
+    })
+    .catch(error => console.log("Service Worker registration failed:", error));
+}
+
+// Show update notification (optional visual feedback)
+function showUpdateNotification() {
+  // Simple approach: just reload automatically after a short delay
+  setTimeout(() => {
+    console.log('App updated, reloading...');
+    window.location.reload();
+  }, 1000);
 }
 
 // Save state to localStorage
