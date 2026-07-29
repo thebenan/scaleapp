@@ -1,0 +1,12 @@
+# No bundler, no npm — the build step is one sed that stamps the commit SHA into
+# the files that need to change bytes on every deploy.
+[build]
+  command = "sed -i \"s/__BUILD_ID__/${COMMIT_REF:-dev}/g\" sw.js script.js"
+  publish = "."
+
+# 19 KB of assets: revalidating every load costs a 304 and makes stale assets
+# structurally impossible. Cheaper than getting cache invalidation wrong again.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"

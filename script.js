@@ -33,52 +33,33 @@ const saveRecipeBtn = document.getElementById("saveRecipeBtn");
 const deleteRecipeName = document.getElementById("deleteRecipeName");
 const confirmDeleteBtn = document.getElementById("confirmDeleteBtn");
 
-// Register Service Worker with update detection
-if (
-  "serviceWorker" in navigator &&
-  (location.protocol === "https:" ||
-    location.protocol === "http:" ||
-    location.hostname === "localhost" ||
-    location.hostname === "127.0.0.1")
-) {
+// Stamped with the commit SHA at deploy time by the sed in netlify.toml.
+const BUILD_ID = "__BUILD_ID__";
+
+const buildStamp = document.getElementById("buildStamp");
+if (buildStamp) buildStamp.textContent = `build ${BUILD_ID.slice(0, 7)}`;
+
+// Register Service Worker
+if ("serviceWorker" in navigator && window.isSecureContext) {
+  // No controller at load time means this is a first install, and the
+  // controllerchange that follows is expected — reloading on it would give
+  // every brand-new visitor a gratuitous refresh.
+  const hadController = !!navigator.serviceWorker.controller;
+  let refreshing = false;
+
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadController || refreshing) return;
+    refreshing = true;
+    window.location.reload();
+  });
+
   navigator.serviceWorker.register("/sw.js")
     .then(registration => {
-      console.log("Service Worker registered");
-      
-      // Check for updates every 60 seconds
-      setInterval(() => {
-        registration.update();
-      }, 60000);
-      
-      // Listen for new service worker taking control
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        console.log('New service worker activated, reloading...');
-        window.location.reload();
-      });
-      
-      // Handle service worker updates
-      registration.addEventListener('updatefound', () => {
-        const newWorker = registration.installing;
-        if (newWorker) {
-          newWorker.addEventListener('statechange', () => {
-            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              // New content available, show update notification
-              showUpdateNotification();
-            }
-          });
-        }
-      });
+      // This poll is what pulls the fix onto clients still running the old
+      // worker, so it has to stay at least until everyone has loaded once.
+      setInterval(() => registration.update(), 60000);
     })
     .catch(error => console.log("Service Worker registration failed:", error));
-}
-
-// Show update notification (optional visual feedback)
-function showUpdateNotification() {
-  // Simple approach: just reload automatically after a short delay
-  setTimeout(() => {
-    console.log('App updated, reloading...');
-    window.location.reload();
-  }, 1000);
 }
 
 // Save state to localStorage
