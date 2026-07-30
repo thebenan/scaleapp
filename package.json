@@ -1,0 +1,9 @@
+{
+  "name": "scaleapp-functions",
+  "private": true,
+  "type": "module",
+  "comment": "Server-side only. Netlify installs this when bundling the function; the frontend still ships raw unbundled files with no build step.",
+  "dependencies": {
+    "@netlify/blobs": "^8.1.0"
+  }
+}

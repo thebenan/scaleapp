@@ -4,6 +4,15 @@
   command = "sed -i \"s/__BUILD_ID__/${COMMIT_REF:-dev}/g\" sw.js script.js"
   publish = "."
 
+# force = true matters twice over: static files normally win over redirects, so
+# without it /api/core.mjs would be served as a downloadable file instead of
+# being routed to the function.
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
+  force = true
+
 # 19 KB of assets: revalidating every load costs a 304 and makes stale assets
 # structurally impossible. Cheaper than getting cache invalidation wrong again.
 [[headers]]

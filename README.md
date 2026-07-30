@@ -4,11 +4,24 @@ Add your recipes, scale them to any number of servings.
 
 Live at [nomathrequired.netlify.app](https://nomathrequired.netlify.app)
 
+Sign in with a passphrase to get your own cookbook, synced across your devices
+and usable offline. You can publish a copy of a recipe so anyone can read it
+without signing in.
+
 ## Run it locally
 
 ```sh
-python3 -m http.server 8000   # then open http://localhost:8000
+node tests/devserver.mjs 8000   # then open http://localhost:8000
 ```
+
+Serves the files and a working `/api`, using the same `api/core.mjs` the deployed
+function runs, backed by an in-memory store. No npm, no `netlify dev`. Data is
+discarded when the process stops.
+
+Test passphrases: `test-passphrase` (person `tester`, admin) and
+`other-passphrase` (person `other`). Override with `AUTH_TOKENS` and `ADMIN_USER`.
+
+`python3 -m http.server 8000` also works if you don't need `/api`.
 
 The service worker does not register on localhost, because its cache name comes
 from the deploy-time build id and would serve stale files after every edit. Add
@@ -40,7 +53,36 @@ git config core.hooksPath .githooks
 One-time, per clone. Skips itself if Chrome isn't installed; bypass with
 `git push --no-verify`. GitHub Actions runs the same suite on every push.
 
+## How it fits together
+
+| File | Role |
+|---|---|
+| `storage.js` | recipes, migrations, persistence. Knows nothing about the DOM |
+| `sync.js` | pull/push, conflict resolution, offline outbox, publishing |
+| `script.js` | all the UI |
+| `api/core.mjs` | server logic. No Netlify imports, so it runs anywhere |
+| `netlify/functions/api.mjs` | thin adapter: Netlify Blobs + env vars |
+| `tests/devserver.mjs` | the same core with an in-memory store |
+
+Moving off Netlify means rewriting `netlify/functions/api.mjs` only.
+
+### Server configuration
+
+Two environment variables, set in the Netlify UI and never committed:
+
+- `AUTH_TOKENS` — `{"benan":"a-long-passphrase","alice":"another-one"}`.
+  One entry per person; each secret must be 8+ characters. Parsed per request,
+  so adding or rotating somebody takes effect without a redeploy.
+- `ADMIN_USER` — the one person who may also remove anyone else's published
+  recipe, e.g. `benan`.
+
+`package.json` exists only so Netlify can install `@netlify/blobs` when bundling
+the function. The frontend still ships raw, unbundled files.
+
 ## Deploying
 
 Netlify builds on every push to `main`. The footer shows the deployed commit and
 how many recipes are stored on the device.
+
+
+

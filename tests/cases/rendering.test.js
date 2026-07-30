@@ -6,7 +6,7 @@ check("footer shows recipe count", /2 recipes/.test(buildStamp.textContent),
       buildStamp.textContent);
 
 // Unscaled render, including "to taste" for a null amount.
-showRecipe(recipes[0].id);
+showRecipe(store.recipes[0].id);
 const rows = [...ingredientsList.children].map(li => li.textContent);
 check("renders unscaled amounts", rows[0] === "200 g flour", rows[0]);
 check("null amount omits the number", rows[2] === "salt", JSON.stringify(rows[2]));
@@ -27,7 +27,7 @@ check("scaling is not cumulative",
       [...ingredientsList.children][0].textContent);
 
 // A recipe name is user input and must never become markup.
-showRecipe(recipes[1].id);
+showRecipe(store.recipes[1].id);
 check("recipe name not executed", window.__XSS === undefined);
 check("recipe name rendered as text", recipeName.textContent.includes("<img"),
       recipeName.textContent);
@@ -41,19 +41,19 @@ check("quote in name survives edit form", firstName === 'quote"name', firstName)
 
 // Validation: blank name and blank servings must each block the save, and say
 // so in the banner rather than in a blocking alert().
-const before = recipes.length;
+const before = store.recipes.length;
 recipeNameInput.value = "";
 servingsInput.value = "";
 saveRecipeBtn.click();
 check("blank name blocks save",
-      recipes.length === before && /name/i.test(bannerText.textContent),
+      store.recipes.length === before && /name/i.test(bannerText.textContent),
       bannerText.textContent);
 check("warning banner is visible", !banner.classList.contains("d-none"),
       banner.className);
 recipeNameInput.value = "Soup";
 saveRecipeBtn.click();
 check("blank servings blocks save",
-      recipes.length === before && /servings/i.test(bannerText.textContent),
+      store.recipes.length === before && /servings/i.test(bannerText.textContent),
       bannerText.textContent);
 
 // A warning must not disappear on its own the way a confirmation does.
@@ -61,7 +61,7 @@ dismissBanner();
 check("banner dismisses", banner.classList.contains("d-none"));
 
 // A recipe stored before servings were validated must warn, not divide by zero.
-recipes.push({ id: "legacy-id", name: "Legacy", servings: null, deletedAt: null,
+store.recipes.push({ id: "legacy-id", name: "Legacy", servings: null, deletedAt: null,
                updatedAt: Date.now(),
                ingredients: [{ id: "legacy-ing", name: "x", amount: 1, unit: "g" }] });
 showRecipe("legacy-id");

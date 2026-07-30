@@ -20,7 +20,9 @@ if [ -z "$CHROME" ]; then
   exit 1
 fi
 
-python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1 &
+# The dev server rather than python's http.server, so tests hit the same
+# api/core.mjs the deployed function runs, backed by an in-memory store.
+node tests/devserver.mjs "$PORT" >/dev/null 2>&1 &
 SERVER_PID=$!
 cleanup() {
   kill "$SERVER_PID" 2>/dev/null

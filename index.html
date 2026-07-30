@@ -15,8 +15,12 @@
 <body class="bg-light">
 
   <!-- Header -->
-  <nav class="navbar navbar-light bg-white shadow-sm px-3">
+  <nav class="navbar navbar-light bg-white shadow-sm px-3 d-flex justify-content-between">
     <span class="navbar-brand mb-0 h1">🍳 Recipe Scaler</span>
+    <span class="d-flex align-items-center gap-2">
+      <small id="syncStatus" class="text-muted"></small>
+      <button id="authBtn" class="btn btn-sm btn-outline-primary">Sign in</button>
+    </span>
   </nav>
 
   <div class="container py-3">
@@ -57,11 +61,24 @@
         <!-- Ingredients -->
         <ul id="ingredientsList" class="list-group mb-3"></ul>
 
-        <div class="d-flex justify-content-between">
+        <div class="d-flex flex-wrap justify-content-between gap-2">
             <button id="editRecipeBtn" class="btn btn-warning">✏️ Edit</button>
+            <button id="publishBtn" class="btn btn-outline-success">🌍 Publish</button>
+            <button id="unpublishBtn" class="btn btn-outline-secondary d-none">Unpublish</button>
             <button id="deleteRecipeBtn" class="btn btn-danger">🗑️ Delete</button>
         </div>
 
+      </div>
+    </div>
+
+    <!-- Public recipes. Readable without signing in. -->
+    <div class="mt-4">
+      <button id="publicBtn" class="btn btn-outline-primary btn-sm">🌍 Public recipes</button>
+    </div>
+    <div id="publicPanel" class="card mt-2 d-none">
+      <div class="card-body">
+        <h6 class="card-title">Published by everyone</h6>
+        <div id="publicList" class="list-group"></div>
       </div>
     </div>
 
@@ -112,6 +129,54 @@
     </div>
   </div>
 
+  <!-- Modal: Sign in -->
+  <div class="modal fade" id="authModal" tabindex="-1">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Sign in</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted small mb-2">
+            Your passphrase gives you your own cookbook, synced across your
+            devices. You can browse public recipes without one.
+          </p>
+          <input type="password" id="passphraseInput" class="form-control"
+                 placeholder="Passphrase" autocomplete="current-password">
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button id="signInBtn" class="btn btn-primary">Sign in</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Confirm publishing, which is irreversible in the sense that
+       anyone may already have seen it -->
+  <div class="modal fade" id="publishModal" tabindex="-1">
+    <div class="modal-dialog modal-sm">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">🌍 Publish recipe</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <p>Publish a copy of "<span id="publishRecipeName"></span>"?</p>
+          <p class="text-muted small mb-0">
+            Anyone who visits the site can read it, without a passphrase. Your own
+            copy stays private and is not affected. You can unpublish at any time.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button id="confirmPublishBtn" class="btn btn-success">Publish</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Delete Confirmation Modal -->
   <div class="modal fade" id="deleteModal" tabindex="-1">
     <div class="modal-dialog modal-sm">
@@ -133,6 +198,6 @@
   </div>
 
   <script src="vendor/bootstrap.bundle.min.js"></script>
-  <script src="script.js"></script>
+  <script type="module" src="script.js"></script>
 </body>
 </html>

@@ -1,43 +1,43 @@
 // Import merging, and restoring from Recently deleted.
 
-check("seed loaded", recipes.length === 3 && liveRecipes().length === 2,
-      recipes.length + "/" + liveRecipes().length);
+check("seed loaded", store.recipes.length === 3 && store.live().length === 2,
+      store.recipes.length + "/" + store.live().length);
 
 // --- import merge semantics ---
 // mergeRecipes is what the file picker feeds, so it is tested directly rather
 // than by synthesising a File and a change event.
 
 // A recipe the collection has never seen is added.
-let res = mergeRecipes(migrate([
+let res = store.merge(migrate([
   { id: "r-new", name: "Fresh", servings: 6, updatedAt: Date.now(),
     ingredients: [{ id: "i-9", name: "oats", amount: 80, unit: "g" }] }
 ]));
-check("unknown recipe is added", res.added === 1 && !!findRecipe("r-new"),
+check("unknown recipe is added", res.added === 1 && !!store.find("r-new"),
       JSON.stringify(res));
 
 // Importing the same file twice must be a no-op — this is the property that
 // makes an import safe to retry, and it only works because ids are stable.
-res = mergeRecipes(migrate({ schemaVersion: 3, recipes: recipes.map(r => ({ ...r })) }));
+res = store.merge(migrate({ schemaVersion: 3, recipes: store.recipes.map(r => ({ ...r })) }));
 check("re-importing the same data changes nothing",
       res.added === 0 && res.updated === 0, JSON.stringify(res));
 
 // A newer copy wins.
-const keeper = findRecipe("r-keep");
-res = mergeRecipes([{ ...keeper, name: "Keeper v2", updatedAt: keeper.updatedAt + 5000 }]);
-check("newer copy overwrites", res.updated === 1 && findRecipe("r-keep").name === "Keeper v2",
-      findRecipe("r-keep").name);
+const keeper = store.find("r-keep");
+res = store.merge([{ ...keeper, name: "Keeper v2", updatedAt: keeper.updatedAt + 5000 }]);
+check("newer copy overwrites", res.updated === 1 && store.find("r-keep").name === "Keeper v2",
+      store.find("r-keep").name);
 
 // A stale copy must not clobber current work — an old backup is additive only.
-res = mergeRecipes([{ ...findRecipe("r-keep"), name: "Keeper OLD", updatedAt: 1 }]);
-check("stale copy is ignored", res.skipped === 1 && findRecipe("r-keep").name === "Keeper v2",
-      findRecipe("r-keep").name);
+res = store.merge([{ ...store.find("r-keep"), name: "Keeper OLD", updatedAt: 1 }]);
+check("stale copy is ignored", res.skipped === 1 && store.find("r-keep").name === "Keeper v2",
+      store.find("r-keep").name);
 
 // A backup taken before a delete must not resurrect the recipe, because the
 // tombstone is newer. This is why exports include tombstones.
-res = mergeRecipes([{ id: "r-gone", name: "Deleted One", servings: 1, updatedAt: 1,
+res = store.merge([{ id: "r-gone", name: "Deleted One", servings: 1, updatedAt: 1,
                       deletedAt: null, visibility: "private", owner: null,
                       publishedAs: null, ingredients: [] }]);
-check("stale backup does not resurrect a deleted recipe", findRecipe("r-gone") === null);
+check("stale backup does not resurrect a deleted recipe", store.find("r-gone") === null);
 
 // --- Recently deleted ---
 trashBtn.click();
@@ -47,9 +47,9 @@ check("trash lists the deleted recipe", trashList.textContent.includes("Deleted 
 check("trash excludes live recipes", !trashList.textContent.includes("Keeper v2"),
       trashList.textContent);
 
-const tombstoneUpdatedAt = recipes.find(r => r.id === "r-gone").updatedAt;
+const tombstoneUpdatedAt = store.recipes.find(r => r.id === "r-gone").updatedAt;
 trashList.querySelector(".restore-btn").click();
-const restored = findRecipe("r-gone");
+const restored = store.find("r-gone");
 check("restore clears the tombstone", restored !== null && restored.deletedAt === null);
 check("restore bumps updatedAt past the tombstone",
       restored.updatedAt > tombstoneUpdatedAt,
@@ -94,7 +94,7 @@ importFile.dispatchEvent(new Event("change"));
 check("importing our own export is a no-op",
       await waitFor(() => /0 added, 0 updated/.test(bannerText.textContent)),
       bannerText.textContent);
-check("round trip left the tombstone deleted", findRecipe("r-edit") === null);
+check("round trip left the tombstone deleted", store.find("r-edit") === null);
 
 // A success notify leaves a pending auto-dismiss timer, and Chrome's virtual
 // clock fast-forwards to pending timers — which would eat the time budget before
@@ -110,4 +110,4 @@ importFile.dispatchEvent(new Event("change"));
 check("garbage file reports an error",
       await waitFor(() => /could not read/i.test(bannerText.textContent)),
       bannerText.textContent);
-check("garbage file leaves data intact", !!findRecipe("r-keep"));
+check("garbage file leaves data intact", !!store.find("r-keep"));

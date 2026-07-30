@@ -1,79 +1,10 @@
-// Local storage key
-const STORAGE_KEY = "recipes";
-const SCHEMA_VERSION = 3;
+import {
+  store, migrate, newId, onStoreChange,
+  SCHEMA_VERSION, buildExportPayload
+} from "./storage.js";
+import { sync } from "./sync.js";
 
-// v1 was a bare array of {name, servings, ingredients} with no identity at all.
-// v2 wraps it in an envelope and gives every recipe and ingredient a permanent
-// id, a modified time, and a tombstone field.
-function newId() {
-  // randomUUID needs a secure context, which a bare http:// LAN address is not
-  // — that's the case when testing a phone against a laptop dev server.
-  if (crypto.randomUUID) return crypto.randomUUID();
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-// Idempotent by construction: existing ids and timestamps are preserved, so
-// this is safe to run on every load forever.
-function migrate(parsed) {
-  const list = Array.isArray(parsed) ? parsed
-    : (parsed && Array.isArray(parsed.recipes) ? parsed.recipes : []);
-  const now = Date.now();
-  return list.map(r => ({
-    id: r.id || newId(),
-    name: r.name ?? "",
-    servings: r.servings,
-    ingredients: (r.ingredients || []).map(ing => ({
-      id: ing.id || newId(),
-      name: ing.name ?? "",
-      amount: ing.amount ?? null,
-      unit: ing.unit ?? ""
-    })),
-    updatedAt: r.updatedAt || now,
-    // A deleted recipe is kept as a tombstone rather than spliced out. Without
-    // it, one device's delete is undone by another device that still has the
-    // recipe locally and syncs it back.
-    deletedAt: r.deletedAt ?? null,
-    // v3. Everything starts private, so turning sync on never dumps one
-    // person's collection into anyone else's view — publishing is deliberate.
-    visibility: r.visibility === "public" ? "public" : "private",
-    owner: r.owner ?? null,
-    // publicId of the published copy, or null. Publishing copies rather than
-    // moves, so the private original and the public snapshot are independent.
-    publishedAs: r.publishedAs ?? null
-  }));
-}
-
-// Guarded, because an unparseable value here used to throw before a single
-// handler was attached — bricking the app with no way back. Stash the raw
-// string rather than discarding it, so bad data is never silently destroyed.
-let storageBroken = false;
-function loadRecipes() {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (raw === null) return [];
-  try {
-    return migrate(JSON.parse(raw));
-  } catch (err) {
-    console.error("Could not read saved recipes:", err);
-    localStorage.setItem(`${STORAGE_KEY}.corrupt.${Date.now()}`, raw);
-    storageBroken = true;
-    return [];
-  }
-}
-
-// State. `recipes` holds tombstones too; everything user-facing goes through
-// liveRecipes().
-let recipes = loadRecipes();
-let currentRecipeId = null;
-
-function liveRecipes() {
-  return recipes.filter(r => !r.deletedAt);
-}
-
-function findRecipe(id) {
-  return recipes.find(r => r.id === id && !r.deletedAt) || null;
-}
-
-// DOM elements
+// --- DOM elements ---
 const recipeSelect = document.getElementById("recipeSelect");
 const searchInput = document.getElementById("searchInput");
 const clearSearchBtn = document.getElementById("clearSearchBtn");
@@ -89,15 +20,6 @@ const scaleBtn = document.getElementById("scaleBtn");
 const editRecipeBtn = document.getElementById("editRecipeBtn");
 const deleteRecipeBtn = document.getElementById("deleteRecipeBtn");
 const addRecipeBtn = document.getElementById("addRecipeBtn");
-
-// Built on first use, not at parse time. Constructing these eagerly meant a
-// missing Bootstrap threw here and aborted the rest of the file, so the recipe
-// list never rendered — an app that looked empty rather than broken.
-const modals = {};
-function modal(id) {
-  if (!modals[id]) modals[id] = new bootstrap.Modal(document.getElementById(id));
-  return modals[id];
-}
 
 const modalTitle = document.getElementById("modalTitle");
 const recipeNameInput = document.getElementById("recipeNameInput");
@@ -117,7 +39,30 @@ const importFile = document.getElementById("importFile");
 const trashBtn = document.getElementById("trashBtn");
 const trashPanel = document.getElementById("trashPanel");
 const trashList = document.getElementById("trashList");
+const buildStamp = document.getElementById("buildStamp");
 
+const authBtn = document.getElementById("authBtn");
+const syncStatus = document.getElementById("syncStatus");
+const passphraseInput = document.getElementById("passphraseInput");
+const signInBtn = document.getElementById("signInBtn");
+const publishBtn = document.getElementById("publishBtn");
+const unpublishBtn = document.getElementById("unpublishBtn");
+const publishRecipeName = document.getElementById("publishRecipeName");
+const confirmPublishBtn = document.getElementById("confirmPublishBtn");
+const publicBtn = document.getElementById("publicBtn");
+const publicPanel = document.getElementById("publicPanel");
+const publicList = document.getElementById("publicList");
+
+// Built on first use, not at parse time. Constructing these eagerly meant a
+// missing Bootstrap threw here and aborted the rest of the file, so the recipe
+// list never rendered — an app that looked empty rather than broken.
+const modals = {};
+export function modal(id) {
+  if (!modals[id]) modals[id] = new bootstrap.Modal(document.getElementById(id));
+  return modals[id];
+}
+
+// --- Status banner ---
 // Replaces alert(): non-blocking, and somewhere for sync to report into.
 // Problems stay until dismissed; confirmations clear themselves.
 const BANNER_CLASSES = {
@@ -126,7 +71,7 @@ const BANNER_CLASSES = {
 };
 let bannerTimer = null;
 
-function notify(message, kind = "info") {
+export function notify(message, kind = "info") {
   clearTimeout(bannerTimer);
   bannerText.textContent = message;
   banner.className = `alert alert-dismissible ${BANNER_CLASSES[kind] || BANNER_CLASSES.info}`;
@@ -135,89 +80,49 @@ function notify(message, kind = "info") {
   }
 }
 
-function dismissBanner() {
+export function dismissBanner() {
   clearTimeout(bannerTimer);
   banner.classList.add("d-none");
 }
 
 bannerClose.addEventListener("click", dismissBanner);
 
-// Stamped with the commit SHA at deploy time by the sed in netlify.toml. Left
-// as the literal placeholder when served straight off disk, which is how a
-// local checkout tells itself apart from a deploy.
+// --- Build identity ---
+// Stamped with the commit SHA at deploy time by the sed in netlify.toml. Left as
+// the literal placeholder when served straight off disk, which is how a local
+// checkout tells itself apart from a deploy.
 const RAW_BUILD_ID = "__BUILD_ID__";
 const BUILD_ID = RAW_BUILD_ID.startsWith("__BUILD") ? "dev" : RAW_BUILD_ID.slice(0, 7);
 
 // Recipe count goes in the footer too: phones have no devtools, so this is the
 // only way to tell "storage was wiped" apart from "this device never had them".
-const buildStamp = document.getElementById("buildStamp");
 function renderBuildStamp() {
   if (!buildStamp) return;
-  buildStamp.textContent = storageBroken
+  buildStamp.textContent = store.broken
     ? `build ${BUILD_ID} · saved data unreadable, backed up`
-    : `build ${BUILD_ID} · ${liveRecipes().length} recipes on this device`;
-}
-renderBuildStamp();
-
-// Asks the browser not to evict this origin's storage under pressure. Granted
-// automatically for installed PWAs; on iOS Safari it is the difference between
-// recipes surviving a quiet week and being deleted by ITP.
-if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
-
-// On localhost the build id is never substituted, so the cache name never
-// changes and the worker would serve stale files after every edit — the exact
-// "my changes don't show up" symptom this whole rewrite was fixing. Skip it
-// locally and tear down any worker a previous session left behind. Append
-// ?sw=1 when you actually want to test offline behaviour.
-const localDev = ["localhost", "127.0.0.1"].includes(location.hostname)
-  && !new URLSearchParams(location.search).has("sw");
-
-if (localDev && "serviceWorker" in navigator) {
-  navigator.serviceWorker.getRegistrations()
-    .then(regs => regs.forEach(r => r.unregister()))
-    .then(() => caches.keys().then(ks => Promise.all(ks.map(k => caches.delete(k)))))
-    .catch(() => {});
+    : `build ${BUILD_ID} · ${store.live().length} recipes on this device`;
 }
 
-// Register Service Worker
-if (!localDev && "serviceWorker" in navigator && window.isSecureContext) {
-  // No controller at load time means this is a first install, and the
-  // controllerchange that follows is expected — reloading on it would give
-  // every brand-new visitor a gratuitous refresh.
-  const hadController = !!navigator.serviceWorker.controller;
-  let refreshing = false;
+// --- State that belongs to the view, not the data ---
+let currentRecipeId = null;
+// Which recipe the modal is editing, kept separate from which one is on screen.
+// Overloading a single variable meant opening "Add" while a recipe was displayed
+// silently disabled that recipe's own edit and delete buttons.
+let editingId = null;
+// A published recipe being viewed. Not in the store — it belongs to whoever
+// published it — so it is held separately and rendered read-only.
+let currentPublic = null;
 
-  navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (!hadController || refreshing) return;
-    refreshing = true;
-    window.location.reload();
-  });
-
-  navigator.serviceWorker.register("/sw.js")
-    .then(registration => {
-      // This poll is what pulls the fix onto clients still running the old
-      // worker, so it has to stay at least until everyone has loaded once.
-      setInterval(() => registration.update(), 60000);
-    })
-    .catch(error => console.log("Service Worker registration failed:", error));
+// Whatever is on screen, private or public. Scaling works on either.
+function activeRecipe() {
+  return store.find(currentRecipeId) || currentPublic;
 }
 
-// Save state to localStorage. Tombstones are written too — they are what stops
-// a delete being undone later.
-function saveRecipes() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    schemaVersion: SCHEMA_VERSION,
-    recipes
-  }));
-  renderRecipeList();
-  renderBuildStamp();
-}
-
-// Render dropdown list (always shows all live recipes)
+// --- Rendering ---
 function renderRecipeList() {
   recipeSelect.innerHTML = `<option value="">-- Select recipe --</option>`;
 
-  liveRecipes().forEach(r => {
+  store.live().forEach(r => {
     const option = document.createElement("option");
     option.value = r.id;
     option.textContent = r.name;
@@ -229,17 +134,22 @@ function renderRecipeList() {
   recipeSelect.value = currentRecipeId ?? "";
 }
 
-// Handle search and show filtered results
+// Storage never calls rendering directly; it announces changes and the view
+// reacts. That seam is what lets the sync layer mutate recipes safely.
+onStoreChange(() => {
+  renderRecipeList();
+  renderBuildStamp();
+});
+
 function handleSearch(filterKeyword = '') {
-  // Show/hide clear button based on whether there's text
   if (filterKeyword.trim()) {
     clearSearchBtn.classList.remove("d-none");
   } else {
     clearSearchBtn.classList.add("d-none");
   }
-  
+
   if (filterKeyword.trim()) {
-    const filteredRecipes = liveRecipes().filter(recipe =>
+    const filteredRecipes = store.live().filter(recipe =>
       recipe.name.toLowerCase().includes(filterKeyword.toLowerCase())
     );
 
@@ -255,7 +165,6 @@ function handleSearch(filterKeyword = '') {
         item.textContent = r.name;
         item.onclick = () => {
           showRecipe(r.id);
-          // Clear search and hide results when recipe is selected
           clearSearch();
         };
         searchResultsList.appendChild(item);
@@ -266,16 +175,14 @@ function handleSearch(filterKeyword = '') {
   }
 }
 
-// Clear search function
 function clearSearch() {
   searchInput.value = "";
   clearSearchBtn.classList.add("d-none");
   searchResults.classList.add("d-none");
 }
 
-// Rows are built with textContent, not innerHTML. Recipe text is user input,
-// and once a cookbook is shared between people this stops being self-XSS and
-// becomes stored XSS.
+// Rows are built with textContent, not innerHTML. Recipe text is user input, and
+// with a public recipe list this stops being self-XSS and becomes stored XSS.
 function renderIngredients(ingredients, factor = 1) {
   ingredientsList.innerHTML = "";
   ingredients.forEach(ing => {
@@ -291,9 +198,8 @@ function renderIngredients(ingredients, factor = 1) {
   });
 }
 
-// Display selected recipe
 function showRecipe(id) {
-  const r = findRecipe(id);
+  const r = store.find(id);
   // The id can be stale — a recipe deleted on another device, or a dropdown
   // rebuilt mid-interaction. Hide rather than throw.
   if (!r) {
@@ -302,18 +208,51 @@ function showRecipe(id) {
     return;
   }
   currentRecipeId = id;
+  currentPublic = null;
   recipeName.textContent = r.name;
   originalServings.textContent = r.servings;
   desiredServings.value = "";
   renderIngredients(r.ingredients);
   recipeDisplay.classList.remove("d-none");
   recipeSelect.value = id;
+  renderOwnershipControls();
 }
 
-// Scale recipe
+// A published recipe is someone else's copy: viewable and scalable, never
+// editable here. Only the buttons change; the rendering path is shared.
+function showPublicRecipe(entry) {
+  currentRecipeId = null;
+  currentPublic = entry;
+  recipeName.textContent = entry.name;
+  originalServings.textContent = entry.servings;
+  desiredServings.value = "";
+  renderIngredients(entry.ingredients);
+  recipeDisplay.classList.remove("d-none");
+  recipeSelect.value = "";
+  renderOwnershipControls();
+}
+
+// Edit, delete and publish only make sense for your own recipes.
+function renderOwnershipControls() {
+  const mine = !!store.find(currentRecipeId);
+  editRecipeBtn.classList.toggle("d-none", !mine);
+  deleteRecipeBtn.classList.toggle("d-none", !mine);
+
+  const recipe = store.find(currentRecipeId);
+  const published = !!recipe?.publishedAs;
+  // Publishing needs an identity, so these stay hidden until you sign in.
+  const canPublish = mine && sync.signedIn();
+  publishBtn.classList.toggle("d-none", !canPublish);
+  unpublishBtn.classList.toggle("d-none", !canPublish || !published);
+  // The public copy is a snapshot, so editing the private original leaves it
+  // stale. Without this there would be no way to refresh it.
+  publishBtn.textContent = published ? "🌍 Update public copy" : "🌍 Publish";
+}
+
+// --- Scaling ---
 scaleBtn.addEventListener("click", () => {
   const desired = parseFloat(desiredServings.value);
-  const r = findRecipe(currentRecipeId);
+  const r = activeRecipe();
   if (!desired || desired <= 0 || !r) return;
   // Recipes saved before servings were validated can hold null, which would
   // divide to Infinity and render "Infinity g flour".
@@ -324,8 +263,7 @@ scaleBtn.addEventListener("click", () => {
   renderIngredients(r.ingredients, desired / r.servings);
 });
 
-
-// Predefined measurement units
+// --- Ingredient form rows ---
 const measurementUnits = [
   { value: '', text: 'Select unit' },
   // Weight units
@@ -361,10 +299,13 @@ const measurementUnits = [
   { value: 'bag', text: 'bag' }
 ];
 
-// Add ingredient field logic
 function addIngredientField(ingredient = { name: '', amount: '', unit: '' }) {
   const div = document.createElement('div');
   div.className = 'input-group mb-2 ingredient-row';
+  // Carried on the row so an edit preserves ingredient identity. The instruction
+  // grid will reference these ids, so regenerating them on every save would
+  // silently detach steps from their ingredients.
+  div.dataset.ingredientId = ingredient.id || newId();
 
   const nameInput = document.createElement('input');
   nameInput.type = 'text';
@@ -381,8 +322,6 @@ function addIngredientField(ingredient = { name: '', amount: '', unit: '' }) {
   amountInput.min = '0';
   amountInput.step = 'any';
   amountInput.value = ingredient.amount ?? '';
-
-  div.dataset.ingredientId = ingredient.id || newId();
 
   const unitSelect = document.createElement('select');
   unitSelect.className = 'form-select ingredient-unit';
@@ -405,12 +344,9 @@ function addIngredientField(ingredient = { name: '', amount: '', unit: '' }) {
   ingredientsFields.appendChild(div);
 }
 
-// Which recipe the modal is editing, kept separate from which one is on screen.
-// Overloading a single variable meant opening "Add" while a recipe was displayed
-// silently disabled that recipe's own edit and delete buttons.
-let editingId = null;
+addIngredientFieldBtn.addEventListener('click', () => addIngredientField());
 
-// Add recipe button
+// --- Add / edit ---
 addRecipeBtn.addEventListener("click", () => {
   editingId = null;
   modalTitle.textContent = "Add Recipe";
@@ -421,9 +357,8 @@ addRecipeBtn.addEventListener("click", () => {
   modal("recipeModal").show();
 });
 
-// Edit recipe button
 editRecipeBtn.addEventListener("click", () => {
-  const r = findRecipe(currentRecipeId);
+  const r = store.find(currentRecipeId);
   if (!r) return;
   editingId = r.id;
   modalTitle.textContent = "Edit Recipe";
@@ -435,7 +370,6 @@ editRecipeBtn.addEventListener("click", () => {
   modal("recipeModal").show();
 });
 
-// Save recipe
 saveRecipeBtn.addEventListener("click", () => {
   const name = recipeNameInput.value.trim();
   const servings = parseFloat(servingsInput.value);
@@ -454,117 +388,82 @@ saveRecipeBtn.addEventListener("click", () => {
     return;
   }
 
-  const ingredientRows = ingredientsFields.querySelectorAll('.ingredient-row');
-  const ingredients = Array.from(ingredientRows).map(row => {
-    const name = row.querySelector('.ingredient-name').value.trim();
+  const ingredients = Array.from(ingredientsFields.querySelectorAll('.ingredient-row')).map(row => {
     const amount = parseFloat(row.querySelector('.ingredient-amount').value);
-    const unit = row.querySelector('.ingredient-unit').value;
-    // null, not 0: a blank amount means "to taste", and 0 would scale an
-    // ingredient to nothing.
     return {
-      // Carried on the row so an edit preserves ingredient identity. The
-      // instruction grid will reference these ids, so regenerating them on
-      // every save would silently detach steps from their ingredients.
       id: row.dataset.ingredientId || newId(),
-      name,
+      name: row.querySelector('.ingredient-name').value.trim(),
+      // null, not 0: a blank amount means "to taste", and 0 would scale an
+      // ingredient to nothing.
       amount: Number.isFinite(amount) ? amount : null,
-      unit
+      unit: row.querySelector('.ingredient-unit').value
     };
   }).filter(ing => ing.name);
 
-  const existing = findRecipe(editingId);
-  if (existing) {
-    Object.assign(existing, { name, servings, ingredients, updatedAt: Date.now() });
+  if (store.find(editingId)) {
+    store.update(editingId, { name, servings, ingredients });
   } else {
-    const recipe = {
-      id: newId(), name, servings, ingredients,
-      updatedAt: Date.now(), deletedAt: null
-    };
-    recipes.push(recipe);
-    // Show what was just added. Previously the dropdown was rebuilt and reset
-    // to the placeholder, so a new recipe vanished the moment you saved it.
-    currentRecipeId = recipe.id;
+    // Show what was just added. Previously the dropdown was rebuilt and reset to
+    // the placeholder, so a new recipe vanished the moment you saved it.
+    currentRecipeId = store.create({ name, servings, ingredients }).id;
   }
 
-  saveRecipes();
+  store.save();
   modal("recipeModal").hide();
   showRecipe(currentRecipeId);
+  queueSync(currentRecipeId);
   editingId = null;
 });
 
-addIngredientFieldBtn.addEventListener('click', () => addIngredientField());
-
-// Delete recipe
+// --- Delete ---
 deleteRecipeBtn.addEventListener("click", () => {
-  const r = findRecipe(currentRecipeId);
+  const r = store.find(currentRecipeId);
   if (!r) return;
-
   deleteRecipeName.textContent = r.name;
   modal("deleteModal").show();
 });
 
-// Confirm delete
 confirmDeleteBtn.addEventListener("click", () => {
-  const r = findRecipe(currentRecipeId);
-  if (!r) return;
-
   // Tombstoned, not spliced out. A removed entry looks identical to one that
   // never arrived, so another device holding the recipe would sync it back.
-  r.deletedAt = Date.now();
-  r.updatedAt = r.deletedAt;
+  const deletedId = currentRecipeId;
+  if (!store.remove(deletedId)) return;
 
   currentRecipeId = null;
-  saveRecipes();
+  store.save();
+  // The tombstone itself must be uploaded, or the delete never reaches the
+  // other devices.
+  queueSync(deletedId);
 
   recipeSelect.value = "";
-  // keep the current search filter; list already re-rendered in saveRecipes()
   recipeDisplay.classList.add("d-none");
   modal("deleteModal").hide();
 });
 
-// Handle dropdown select
+// --- Selection ---
 recipeSelect.addEventListener("change", e => {
   if (e.target.value) {
     showRecipe(e.target.value);
-    // Clear search and hide search results when recipe is selected from dropdown
     clearSearch();
   }
 });
 
-// Clear search button
-clearSearchBtn.addEventListener("click", () => {
-  clearSearch();
-});
+clearSearchBtn.addEventListener("click", () => clearSearch());
 
-// Handle search filter
 searchInput.addEventListener("input", () => {
   const keyword = searchInput.value.trim();
   handleSearch(keyword);
-  
-  // Clear recipe display if current recipe is not in filtered results
-  const current = findRecipe(currentRecipeId);
-  if (current && keyword) {
-    if (!current.name.toLowerCase().includes(keyword.toLowerCase())) {
-      recipeDisplay.classList.add("d-none");
-      currentRecipeId = null;
-      recipeSelect.value = "";
-    }
+
+  // Hide the display if the recipe on screen is no longer in the filtered set.
+  const current = store.find(currentRecipeId);
+  if (current && keyword && !current.name.toLowerCase().includes(keyword.toLowerCase())) {
+    recipeDisplay.classList.add("d-none");
+    currentRecipeId = null;
+    recipeSelect.value = "";
   }
 });
 
 // --- Backup ---
-
-// Tombstones are included on purpose: importing a backup must not resurrect
-// recipes that were deleted after it was taken.
-function buildExportPayload() {
-  return {
-    app: "recipe-scaler",
-    schemaVersion: SCHEMA_VERSION,
-    exportedAt: new Date().toISOString(),
-    recipes
-  };
-}
-
 exportBtn.addEventListener("click", () => {
   const payload = buildExportPayload();
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -574,28 +473,8 @@ exportBtn.addEventListener("click", () => {
   link.download = `recipes-${new Date().toISOString().slice(0, 10)}.json`;
   link.click();
   URL.revokeObjectURL(url);
-  notify(`Exported ${liveRecipes().length} recipes.`, "success");
+  notify(`Exported ${store.live().length} recipes.`, "success");
 });
-
-// Merge by id, newest updatedAt wins. Deliberately additive — there is no
-// "replace everything" option, so importing a stale backup can never silently
-// destroy newer work. Use Recently deleted to bring back a specific recipe.
-function mergeRecipes(incoming) {
-  let added = 0, updated = 0, skipped = 0;
-  incoming.forEach(inc => {
-    const existing = recipes.find(r => r.id === inc.id);
-    if (!existing) {
-      recipes.push(inc);
-      added++;
-    } else if (inc.updatedAt > existing.updatedAt) {
-      Object.assign(existing, inc);
-      updated++;
-    } else {
-      skipped++;
-    }
-  });
-  return { added, updated, skipped };
-}
 
 importBtn.addEventListener("click", () => importFile.click());
 
@@ -610,8 +489,10 @@ importFile.addEventListener("change", async () => {
       notify("That file has no recipes in it.", "warning");
       return;
     }
-    const { added, updated, skipped } = mergeRecipes(incoming);
-    saveRecipes();
+    const { added, updated, skipped } = store.merge(incoming);
+    store.save();
+    // Everything from the file needs uploading, not just the counts we report.
+    incoming.forEach(r => queueSync(r.id));
     if (currentRecipeId) showRecipe(currentRecipeId);
     notify(`Imported: ${added} added, ${updated} updated, ${skipped} already current.`, "success");
   } catch (err) {
@@ -624,9 +505,8 @@ importFile.addEventListener("change", async () => {
 });
 
 // --- Recently deleted ---
-
 function renderTrash() {
-  const deleted = recipes.filter(r => r.deletedAt).sort((a, b) => b.deletedAt - a.deletedAt);
+  const deleted = store.deleted();
   trashList.innerHTML = "";
 
   if (deleted.length === 0) {
@@ -648,12 +528,10 @@ function renderTrash() {
     restore.className = "btn btn-sm btn-outline-success restore-btn";
     restore.textContent = "Restore";
     restore.onclick = () => {
-      r.deletedAt = null;
-      // Must be newer than the tombstone, or last-write-wins would let another
-      // device's delete undo this restore on the next sync.
-      r.updatedAt = Date.now();
+      store.restore(r.id);
       currentRecipeId = r.id;
-      saveRecipes();
+      store.save();
+      queueSync(r.id);
       renderTrash();
       showRecipe(r.id);
       notify(`Restored "${r.name}".`, "success");
@@ -669,5 +547,268 @@ trashBtn.addEventListener("click", () => {
   if (!trashPanel.classList.contains("d-none")) renderTrash();
 });
 
-// Init
+// --- Storage durability ---
+// Asks the browser not to evict this origin's storage under pressure. Granted
+// automatically for installed PWAs; on iOS Safari it is the difference between
+// recipes surviving a quiet week and being deleted by ITP.
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+
+// --- Service worker ---
+// On localhost the build id is never substituted, so the cache name never changes
+// and the worker would serve stale files after every edit — the exact "my changes
+// don't show up" symptom this whole rewrite was fixing. Skip it locally and tear
+// down any worker a previous session left behind. Append ?sw=1 to test offline.
+const localDev = ["localhost", "127.0.0.1"].includes(location.hostname)
+  && !new URLSearchParams(location.search).has("sw");
+
+if (localDev && "serviceWorker" in navigator) {
+  navigator.serviceWorker.getRegistrations()
+    .then(regs => regs.forEach(r => r.unregister()))
+    .then(() => caches.keys().then(ks => Promise.all(ks.map(k => caches.delete(k)))))
+    .catch(() => {});
+}
+
+if (!localDev && "serviceWorker" in navigator && window.isSecureContext) {
+  // No controller at load time means this is a first install, and the
+  // controllerchange that follows is expected — reloading on it would give every
+  // brand-new visitor a gratuitous refresh.
+  const hadController = !!navigator.serviceWorker.controller;
+  let refreshing = false;
+
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadController || refreshing) return;
+    refreshing = true;
+    window.location.reload();
+  });
+
+  navigator.serviceWorker.register("/sw.js")
+    .then(registration => {
+      // This poll is what pulls the fix onto clients still running the old
+      // worker, so it has to stay at least until everyone has loaded once.
+      setInterval(() => registration.update(), 60000);
+    })
+    .catch(error => console.log("Service Worker registration failed:", error));
+}
+
+// --- Sync, identity and publishing ---
+
+function renderAuthState() {
+  if (sync.signedIn()) {
+    authBtn.textContent = `Sign out (${sync.person})`;
+    authBtn.className = "btn btn-sm btn-outline-secondary";
+  } else {
+    authBtn.textContent = "Sign in";
+    authBtn.className = "btn btn-sm btn-outline-primary";
+  }
+
+  const waiting = sync.pending().length;
+  if (!sync.signedIn()) {
+    syncStatus.textContent = "";
+  } else if (waiting > 0) {
+    syncStatus.textContent = sync.offline
+      ? `${waiting} not synced (offline)`
+      : `${waiting} syncing…`;
+  } else {
+    syncStatus.textContent = "synced";
+  }
+  renderOwnershipControls();
+}
+
+authBtn.addEventListener("click", async () => {
+  if (sync.signedIn()) {
+    sync.signOut();
+    renderAuthState();
+    notify("Signed out. Your recipes stay on this device.", "info");
+    return;
+  }
+  passphraseInput.value = "";
+  modal("authModal").show();
+});
+
+signInBtn.addEventListener("click", async () => {
+  const passphrase = passphraseInput.value.trim();
+  if (!passphrase) return;
+  try {
+    await sync.signIn(passphrase);
+    modal("authModal").hide();
+    notify(`Signed in as ${sync.person}. Syncing…`, "success");
+    await pullAndFlush();
+  } catch (err) {
+    if (err.status === 401) {
+      notify("That passphrase was not recognised.", "error");
+    } else {
+      notify("Could not reach the server. Your recipes are safe on this device.", "warning");
+    }
+  }
+  renderAuthState();
+});
+
+async function pullAndFlush() {
+  try {
+    const merged = await sync.pull();
+    const flushed = await sync.flush();
+    if (merged.added || flushed.pushed) {
+      notify(`Synced: ${merged.added} received, ${flushed.pushed} sent.`, "success");
+    }
+    if (flushed.superseded) {
+      notify(`${flushed.superseded} recipe(s) were changed on another device; the newer version won.`,
+             "warning");
+    }
+    if (flushed.failed) {
+      notify(`${flushed.failed} change(s) could not be sent yet — they will retry.`, "warning");
+    }
+    if (currentRecipeId) showRecipe(currentRecipeId);
+  } catch (err) {
+    sync.offline = err.status === undefined;
+    notify("Sync unavailable. Everything still works offline.", "warning");
+  }
+  renderAuthState();
+}
+
+// Called after every local mutation. Fire-and-forget: the UI has already updated,
+// and anything that fails stays in the outbox for the next attempt.
+function queueSync(id) {
+  if (!id) return;
+  sync.record(id).then(renderAuthState).catch(() => renderAuthState());
+}
+
+// --- Publishing ---
+
+publishBtn.addEventListener("click", async () => {
+  const r = store.find(currentRecipeId);
+  if (!r) return;
+  // Confirm only the first time. Refreshing an already-public copy does not
+  // change who can see it, so a warning would just be noise.
+  if (r.publishedAs) {
+    await doPublish(r, `"${r.name}" updated for everyone.`);
+    return;
+  }
+  publishRecipeName.textContent = r.name;
+  modal("publishModal").show();
+});
+
+async function doPublish(recipe, successMessage) {
+  try {
+    await sync.publish(recipe);
+    notify(successMessage, "success");
+  } catch (err) {
+    notify(`Could not publish: ${err.message}`, "error");
+  }
+  renderOwnershipControls();
+  renderAuthState();
+}
+
+confirmPublishBtn.addEventListener("click", async () => {
+  const r = store.find(currentRecipeId);
+  if (!r) return;
+  modal("publishModal").hide();
+  await doPublish(r, `"${r.name}" is now public. Your own copy is unchanged.`);
+});
+
+unpublishBtn.addEventListener("click", async () => {
+  const r = store.find(currentRecipeId);
+  if (!r) return;
+  try {
+    await sync.unpublish(r);
+    notify(`"${r.name}" is no longer public.`, "success");
+  } catch (err) {
+    notify(`Could not unpublish: ${err.message}`, "error");
+  }
+  renderOwnershipControls();
+  renderAuthState();
+});
+
+async function renderPublicList() {
+  publicList.innerHTML = "";
+  const loading = document.createElement("div");
+  loading.className = "list-group-item text-muted";
+  loading.textContent = "Loading…";
+  publicList.appendChild(loading);
+
+  let entries;
+  try {
+    entries = await sync.listPublic();
+  } catch {
+    publicList.innerHTML = "";
+    const failed = document.createElement("div");
+    failed.className = "list-group-item text-muted";
+    failed.textContent = "Could not load public recipes.";
+    publicList.appendChild(failed);
+    return;
+  }
+
+  publicList.innerHTML = "";
+  if (entries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "list-group-item text-muted";
+    empty.textContent = "Nothing published yet.";
+    publicList.appendChild(empty);
+    return;
+  }
+
+  entries.forEach(entry => {
+    const row = document.createElement("div");
+    row.className = "list-group-item d-flex justify-content-between align-items-center gap-2";
+
+    const open = document.createElement("button");
+    open.className = "btn btn-link p-0 text-start flex-grow-1 public-open";
+    open.textContent = `${entry.name} · by ${entry.publishedBy}`;
+    open.onclick = () => showPublicRecipe(entry);
+    row.appendChild(open);
+
+    // Shown only to the publisher or the admin; the server enforces it too, so
+    // hiding the button is convenience rather than the actual boundary.
+    if (sync.canRemovePublic(entry)) {
+      const remove = document.createElement("button");
+      remove.className = "btn btn-sm btn-outline-danger public-remove";
+      remove.textContent = "Remove";
+      remove.onclick = async () => {
+        try {
+          await sync.removePublic(entry);
+          notify(`Removed "${entry.name}" from public recipes.`, "success");
+          renderPublicList();
+        } catch (err) {
+          notify(`Could not remove: ${err.message}`, "error");
+        }
+      };
+      row.appendChild(remove);
+    }
+
+    publicList.appendChild(row);
+  });
+}
+
+publicBtn.addEventListener("click", () => {
+  publicPanel.classList.toggle("d-none");
+  if (!publicPanel.classList.contains("d-none")) renderPublicList();
+});
+
+// Retry the outbox as soon as connectivity returns.
+window.addEventListener("online", () => {
+  sync.offline = false;
+  if (sync.signedIn()) pullAndFlush();
+});
+
+// --- Init ---
+store.load();
 renderRecipeList();
+renderBuildStamp();
+renderAuthState();
+
+// Resume a previous session without prompting, then reconcile in the background.
+// Nothing here blocks first paint.
+sync.resume().then(async ok => {
+  renderAuthState();
+  if (ok) await pullAndFlush();
+});
+
+// Module scope is not global, so tests need a deliberate seam. DOM elements are
+// still reachable as window.<id>; this exposes the behaviour.
+window.__app = {
+  store, sync, migrate, newId, SCHEMA_VERSION, buildExportPayload,
+  showRecipe, showPublicRecipe, renderRecipeList, renderTrash, renderPublicList,
+  renderAuthState, renderOwnershipControls, pullAndFlush,
+  handleSearch, clearSearch, notify, dismissBanner, modal, addIngredientField,
+  get currentRecipeId() { return currentRecipeId; },
+  get currentPublic() { return currentPublic; }
+};

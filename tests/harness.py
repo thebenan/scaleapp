@@ -25,6 +25,17 @@ PRELUDE = """
 # Wrapped in an async IIFE so cases can await — the import path reads a File,
 # which is unavoidably asynchronous.
 RUNNER_HEAD = """
+// script.js is a module, so its internals are not global. This is the seam it
+// exposes. DOM elements are still reachable as window.<id>.
+// Use app.<name> for anything that changes over time (currentRecipeId is a live
+// getter, so a destructured copy would go stale immediately).
+const app = window.__app;
+const { store, sync, migrate, newId, SCHEMA_VERSION, buildExportPayload,
+        showRecipe, showPublicRecipe, renderRecipeList, renderTrash, renderPublicList,
+        renderAuthState, renderOwnershipControls, pullAndFlush,
+        handleSearch, clearSearch, notify, dismissBanner, modal,
+        addIngredientField } = app;
+
 const __results = [];
 function check(label, cond, detail) {
   __results.push((cond ? "PASS " : "FAIL ") + label + (detail ? " :: " + detail : ""));
@@ -69,10 +80,14 @@ def build(name, out_path):
     if BOOTSTRAP_TAG not in html:
         sys.exit(f"harness: could not find the bootstrap script tag in index.html")
 
+    # The seed stays a classic inline script so it runs during parsing, before
+    # the deferred module reads localStorage. The assertions must be a module, or
+    # they would run before script.js and find no window.__app.
     html = html.replace(BOOTSTRAP_TAG, f"<script>{PRELUDE}{seed}</script>\n{BOOTSTRAP_TAG}")
     html = html.replace(
         "</body>",
-        f'<pre id="testout"></pre>\n<script>{RUNNER_HEAD}{test}{RUNNER_TAIL}</script>\n</body>',
+        f'<pre id="testout"></pre>\n'
+        f'<script type="module">{RUNNER_HEAD}{test}{RUNNER_TAIL}</script>\n</body>',
     )
     (ROOT / out_path).write_text(html)
 

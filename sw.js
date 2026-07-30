@@ -9,6 +9,8 @@ const SHELL = [
   "/index.html",
   "/style.css",
   "/script.js",
+  "/storage.js",
+  "/sync.js",
   "/manifest.json",
   "/vendor/bootstrap.min.css",
   "/vendor/bootstrap.bundle.min.js"
