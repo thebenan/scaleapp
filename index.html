@@ -19,6 +19,7 @@
     <span class="navbar-brand mb-0 h1">🍳 Recipe Scaler</span>
     <span class="d-flex align-items-center gap-2">
       <small id="syncStatus" class="text-muted"></small>
+      <button id="themeBtn" class="btn btn-sm btn-outline-secondary" aria-label="Switch theme">🌙</button>
       <button id="authBtn" class="btn btn-sm btn-outline-primary">Sign in</button>
     </span>
   </nav>
@@ -32,18 +33,23 @@
       <button type="button" class="btn-close" id="bannerClose" aria-label="Dismiss"></button>
     </div>
 
-    <!-- Search + Dropdown -->
+    <!-- One picker. There used to be a search box, a dropdown and a separate
+         results list, all doing the same job. -->
     <div class="mb-3">
-      <div class="position-relative">
-        <input type="text" id="searchInput" class="form-control mb-2" placeholder="Search recipe...">
-        <button type="button" id="clearSearchBtn" class="btn btn-link text-danger position-absolute top-0 end-0 p-2 d-none" style="z-index: 10;">
-          <span aria-hidden="true">&times;</span>
-        </button>
+      <div class="input-group mb-2">
+        <span class="input-group-text" aria-hidden="true">🔎</span>
+        <input type="search" id="searchInput" class="form-control" placeholder="Search recipes…"
+               aria-label="Search recipes">
+        <button type="button" id="clearSearchBtn" class="btn btn-outline-secondary d-none"
+                aria-label="Clear search">&times;</button>
       </div>
-      <select id="recipeSelect" class="form-select"></select>
-      
-      <div id="searchResults" class="mt-2 d-none">
-        <div id="searchResultsList" class="list-group"></div>
+
+      <div id="recipeList" class="list-group"></div>
+
+      <div id="emptyState" class="text-center text-muted py-5 d-none">
+        <p class="fs-1 mb-2" aria-hidden="true">🍳</p>
+        <p class="mb-1" id="emptyStateTitle">No recipes yet</p>
+        <p class="small mb-0" id="emptyStateHint">Tap the + button to add your first one.</p>
       </div>
     </div>
 
@@ -51,12 +57,21 @@
     <div id="recipeDisplay" class="card d-none">
       <div class="card-body">
         <h5 id="recipeName" class="card-title"></h5>
-        <p><strong>Original Servings:</strong> <span id="originalServings"></span></p>
-        <!-- Scaling input -->
-        <div class="input-group mb-3">
-          <input type="number" id="desiredServings" class="form-control" placeholder="Desired servings">
-          <button class="btn btn-primary" id="scaleBtn">Scale</button>
+        <p class="text-muted small mb-2">
+          Makes <span id="originalServings"></span> servings
+          <span id="publicByline"></span>
+        </p>
+
+        <!-- Scales as you type. It used to overwrite the list only on click,
+             with no way back to the original except reselecting the recipe. -->
+        <label for="desiredServings" class="form-label small mb-1">Scale to</label>
+        <div class="input-group mb-2">
+          <input type="number" id="desiredServings" class="form-control"
+                 placeholder="servings" min="0" step="any" inputmode="decimal">
+          <span class="input-group-text">servings</span>
+          <button class="btn btn-outline-secondary d-none" id="resetScaleBtn">Reset</button>
         </div>
+        <p id="scaleNote" class="text-muted small d-none mb-2"></p>
 
         <!-- Ingredients -->
         <ul id="ingredientsList" class="list-group mb-3"></ul>
@@ -155,6 +170,33 @@
         <div class="modal-footer">
           <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
           <button id="signInBtn" class="btn btn-primary">Sign in</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: what to do with recipes saved before signing in -->
+  <div class="modal fade" id="adoptModal" tabindex="-1" data-bs-backdrop="static">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Recipes already on this device</h5>
+        </div>
+        <div class="modal-body">
+          <p>
+            There <span id="adoptVerb">are</span> <strong id="adoptCount"></strong>
+            <span id="adoptNoun">recipes</span> saved on this device from before you
+            signed in.
+          </p>
+          <p class="text-muted small mb-0">
+            Adding them puts them in <strong id="adoptPerson"></strong>'s cookbook and
+            syncs them to your other devices. Keeping them separate leaves them here,
+            visible only when signed out.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button id="adoptKeepBtn" class="btn btn-secondary">Keep separate</button>
+          <button id="adoptAddBtn" class="btn btn-primary">Add to my cookbook</button>
         </div>
       </div>
     </div>

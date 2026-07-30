@@ -13,6 +13,9 @@ let activeKey = STORAGE_KEY;
 export function activeStorageKey() {
   return activeKey;
 }
+export function namespaceKeyFor(person) {
+  return person ? `${STORAGE_KEY}.${person}` : STORAGE_KEY;
+}
 
 export function newId() {
   // randomUUID needs a secure context, which a bare http:// LAN address is not
@@ -71,22 +74,44 @@ export const store = {
   // is null. Always reloads, so the in-memory list can never belong to someone
   // other than whoever is signed in.
   useNamespace(person) {
-    const nextKey = person ? `${STORAGE_KEY}.${person}` : STORAGE_KEY;
-
-    // First time this person signs in on this browser, adopt whatever was built
-    // up while signed out — that work is theirs, and losing it would be worse
-    // than the alternative. Moved, not copied, so the next person to sign in
-    // cannot inherit it too.
-    if (person && localStorage.getItem(nextKey) === null) {
-      const signedOutSet = localStorage.getItem(STORAGE_KEY);
-      if (signedOutSet !== null) {
-        localStorage.setItem(nextKey, signedOutSet);
-        localStorage.removeItem(STORAGE_KEY);
-      }
-    }
-
-    activeKey = nextKey;
+    activeKey = namespaceKeyFor(person);
     return this.load();
+  },
+
+  // Whether this person has ever had a cookbook on this browser. Used to decide
+  // if they should be asked about recipes saved before they signed in.
+  hasNamespace(person) {
+    return localStorage.getItem(namespaceKeyFor(person)) !== null;
+  },
+
+  signedOutCount() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw === null) return 0;
+      return migrate(JSON.parse(raw)).filter(r => !r.deletedAt).length;
+    } catch {
+      return 0;
+    }
+  },
+
+  // Moves recipes saved before signing in into this person's cookbook. Moved
+  // rather than copied, so the next person to sign in cannot inherit them too.
+  // Never called without asking first — it is not obvious that signing in should
+  // hand your recipes to an account, and it is awkward to undo.
+  adoptSignedOut(person) {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw === null) return 0;
+    let incoming;
+    try {
+      incoming = migrate(JSON.parse(raw));
+    } catch {
+      return 0;
+    }
+    this.useNamespace(person);
+    const { added } = this.merge(incoming);
+    this.save();
+    localStorage.removeItem(STORAGE_KEY);
+    return added;
   },
 
   load() {

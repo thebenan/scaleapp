@@ -56,8 +56,8 @@ check("delete does not shift other recipes",
       recipeName.textContent === shownBefore && shownBefore === "Gamma",
       recipeName.textContent);
 check("ingredients still match the recipe",
-      [...ingredientsList.children][0].textContent === "50 g sugar",
-      [...ingredientsList.children].map(l => l.textContent).join("|"));
+      [...ingredientsList.children][0].querySelector('.ingredient-text').textContent === "50 g sugar",
+      [...ingredientsList.children].map(l => l.querySelector('.ingredient-text').textContent).join("|"));
 
 // --- soft delete ---
 check("tombstone kept in memory", store.recipes.length === 3 && store.live().length === 2);
@@ -65,15 +65,20 @@ check("tombstone has deletedAt", store.recipes.find(r => r.id === alphaId).delet
 check("tombstone persisted to disk", stored().recipes.length === 3,
       "stored=" + stored().recipes.length);
 check("findRecipe refuses a tombstone", store.find(alphaId) === null);
-check("dropdown excludes tombstone", recipeSelect.options.length === 3,
-      "options=" + recipeSelect.options.length);
+check("the list excludes the tombstone", recipeList.children.length === 2,
+      "items=" + recipeList.children.length);
 check("footer count excludes tombstone", /2 recipes/.test(buildStamp.textContent),
       buildStamp.textContent);
-handleSearch("Alpha");
-check("search excludes tombstone",
-      searchResultsList.textContent.includes("No recipes found"),
-      searchResultsList.textContent);
+searchInput.value = "Alpha";
+searchInput.dispatchEvent(new Event("input"));
+check("search excludes tombstone", recipeList.children.length === 0,
+      recipeList.textContent);
+check("no-match empty state names the search term",
+      !emptyState.classList.contains("d-none") && /Alpha/.test(emptyStateTitle.textContent),
+      emptyStateTitle.textContent);
 clearSearch();
+check("clearing the search restores the list", recipeList.children.length === 2,
+      "items=" + recipeList.children.length);
 
 // A stale id (deleted elsewhere, or a dropdown rebuilt mid-interaction) must
 // hide the display rather than throw.
@@ -105,7 +110,9 @@ ingredientsFields.querySelector(".ingredient-amount").value = "20";
 saveRecipeBtn.click();
 check("new recipe is displayed after save", recipeName.textContent === "Delta",
       recipeName.textContent);
-check("new recipe selected in dropdown", recipeSelect.value === app.currentRecipeId);
+check("new recipe is highlighted in the list",
+      recipeList.querySelector(".active")?.dataset.recipeId === app.currentRecipeId,
+      recipeList.querySelector(".active")?.textContent);
 check("new recipe got an id",
       typeof app.currentRecipeId === "string" && app.currentRecipeId.length > 8);
 check("new recipe has a tombstone field", store.find(app.currentRecipeId).deletedAt === null);

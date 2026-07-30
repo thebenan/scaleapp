@@ -19,6 +19,14 @@ check("sign in identifies the person", who.person === "tester", JSON.stringify(w
 check("admin flag comes from the server", who.admin === true);
 check("signedIn reflects state", sync.signedIn() === true);
 
+// Signing in no longer adopts the device's recipes silently, so accept the offer
+// explicitly — this is the "existing user signs in for the first time" path.
+const __adoption = settleSignedOutRecipes();
+await waitFor(() => adoptCount.textContent !== "");
+adoptAddBtn.click();
+await __adoption;
+
+
 // --- first sync must upload, never wipe ---
 // A recipe missing from the server means "not uploaded yet". If that were read as
 // "deleted", everyone's existing recipes would vanish the moment they signed in.

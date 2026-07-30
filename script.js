@@ -3,20 +3,25 @@ import {
   SCHEMA_VERSION, buildExportPayload, activeStorageKey
 } from "./storage.js";
 import { sync } from "./sync.js";
+import { formatAmount, formatIngredient } from "./format.js";
 
 // --- DOM elements ---
-const recipeSelect = document.getElementById("recipeSelect");
 const searchInput = document.getElementById("searchInput");
 const clearSearchBtn = document.getElementById("clearSearchBtn");
-const searchResults = document.getElementById("searchResults");
-const searchResultsList = document.getElementById("searchResultsList");
+const recipeList = document.getElementById("recipeList");
+const emptyState = document.getElementById("emptyState");
+const emptyStateTitle = document.getElementById("emptyStateTitle");
+const emptyStateHint = document.getElementById("emptyStateHint");
 const recipeDisplay = document.getElementById("recipeDisplay");
 const recipeName = document.getElementById("recipeName");
 const originalServings = document.getElementById("originalServings");
 const desiredServings = document.getElementById("desiredServings");
 const ingredientsList = document.getElementById("ingredientsList");
 
-const scaleBtn = document.getElementById("scaleBtn");
+const resetScaleBtn = document.getElementById("resetScaleBtn");
+const scaleNote = document.getElementById("scaleNote");
+const publicByline = document.getElementById("publicByline");
+const themeBtn = document.getElementById("themeBtn");
 const editRecipeBtn = document.getElementById("editRecipeBtn");
 const deleteRecipeBtn = document.getElementById("deleteRecipeBtn");
 const addRecipeBtn = document.getElementById("addRecipeBtn");
@@ -51,6 +56,12 @@ const publishBtn = document.getElementById("publishBtn");
 const unpublishBtn = document.getElementById("unpublishBtn");
 const publishRecipeName = document.getElementById("publishRecipeName");
 const confirmPublishBtn = document.getElementById("confirmPublishBtn");
+const adoptCount = document.getElementById("adoptCount");
+const adoptPerson = document.getElementById("adoptPerson");
+const adoptVerb = document.getElementById("adoptVerb");
+const adoptNoun = document.getElementById("adoptNoun");
+const adoptAddBtn = document.getElementById("adoptAddBtn");
+const adoptKeepBtn = document.getElementById("adoptKeepBtn");
 const publicBtn = document.getElementById("publicBtn");
 const publicPanel = document.getElementById("publicPanel");
 const publicList = document.getElementById("publicList");
@@ -121,19 +132,48 @@ function activeRecipe() {
 }
 
 // --- Rendering ---
+
+// One list, filtered by the search box. Previously a dropdown, a search box and
+// a separate results panel all selected recipes, which meant three places to
+// look and two of them hidden most of the time.
 function renderRecipeList() {
-  recipeSelect.innerHTML = `<option value="">-- Select recipe --</option>`;
+  const keyword = searchInput.value.trim().toLowerCase();
+  clearSearchBtn.classList.toggle("d-none", keyword === "");
 
-  store.live().forEach(r => {
-    const option = document.createElement("option");
-    option.value = r.id;
-    option.textContent = r.name;
-    recipeSelect.appendChild(option);
-  });
+  const all = store.live();
+  const matches = keyword
+    ? all.filter(r => r.name.toLowerCase().includes(keyword))
+    : all;
 
-  // Keep the dropdown pointing at whatever is on screen; rebuilding the options
-  // otherwise resets it to the placeholder.
-  recipeSelect.value = currentRecipeId ?? "";
+  recipeList.innerHTML = "";
+  matches
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .forEach(r => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "list-group-item list-group-item-action";
+      item.classList.toggle("active", r.id === currentRecipeId);
+      item.textContent = r.name;
+      item.dataset.recipeId = r.id;
+      item.onclick = () => showRecipe(r.id);
+      recipeList.appendChild(item);
+    });
+
+  // Distinguish "you have nothing" from "nothing matched", because the useful
+  // next action is different in each case.
+  const nothingToShow = matches.length === 0;
+  emptyState.classList.toggle("d-none", !nothingToShow);
+  recipeList.classList.toggle("d-none", nothingToShow);
+  if (nothingToShow) {
+    const searching = keyword !== "";
+    emptyStateTitle.textContent = searching
+      ? `No recipes match "${searchInput.value.trim()}"`
+      : "No recipes yet";
+    emptyStateHint.textContent = searching
+      ? "Try a different word, or clear the search."
+      : "Tap the + button to add your first one.";
+  }
 }
 
 // Storage never calls rendering directly; it announces changes and the view
@@ -143,44 +183,9 @@ onStoreChange(() => {
   renderBuildStamp();
 });
 
-function handleSearch(filterKeyword = '') {
-  if (filterKeyword.trim()) {
-    clearSearchBtn.classList.remove("d-none");
-  } else {
-    clearSearchBtn.classList.add("d-none");
-  }
-
-  if (filterKeyword.trim()) {
-    const filteredRecipes = store.live().filter(recipe =>
-      recipe.name.toLowerCase().includes(filterKeyword.toLowerCase())
-    );
-
-    searchResults.classList.remove("d-none");
-    searchResultsList.innerHTML = "";
-
-    if (filteredRecipes.length === 0) {
-      searchResultsList.innerHTML = '<div class="list-group-item">No recipes found</div>';
-    } else {
-      filteredRecipes.forEach((r) => {
-        const item = document.createElement("div");
-        item.className = "list-group-item list-group-item-action";
-        item.textContent = r.name;
-        item.onclick = () => {
-          showRecipe(r.id);
-          clearSearch();
-        };
-        searchResultsList.appendChild(item);
-      });
-    }
-  } else {
-    searchResults.classList.add("d-none");
-  }
-}
-
 function clearSearch() {
   searchInput.value = "";
-  clearSearchBtn.classList.add("d-none");
-  searchResults.classList.add("d-none");
+  renderRecipeList();
 }
 
 // Rows are built with textContent, not innerHTML. Recipe text is user input, and
@@ -190,33 +195,92 @@ function renderIngredients(ingredients, factor = 1) {
   ingredients.forEach(ing => {
     const li = document.createElement("li");
     li.className = "list-group-item";
-    // A null amount means "to taste" — show the name without inventing a 0.
+
+    const text = document.createElement("span");
+    text.className = "ingredient-text";
+    text.textContent = formatIngredient(ing, factor);
+    li.appendChild(text);
+
+    // Show what it was before scaling, so the original is never lost from view.
     const hasAmount = ing.amount !== null && ing.amount !== undefined;
-    // Unary + drops trailing zeros, so 2.00 reads as 2 but 0.33 survives.
-    const amount = hasAmount ? `${+(ing.amount * factor).toFixed(2)} ` : "";
-    const unit = ing.unit ? `${ing.unit} ` : "";
-    li.textContent = `${amount}${unit}${ing.name}`;
+    if (factor !== 1 && hasAmount) {
+      const original = document.createElement("span");
+      original.className = "original-amount";
+      original.textContent = `(was ${formatAmount(ing.amount, ing.unit)}${ing.unit ? " " + ing.unit : ""})`;
+      li.appendChild(original);
+    }
+
     ingredientsList.appendChild(li);
   });
 }
 
+// --- Scaling ---
+// Applied from the recipe's stored amounts every time, so it never compounds.
+function currentScaleFactor() {
+  const r = activeRecipe();
+  const desired = parseFloat(desiredServings.value);
+  if (!r || !Number.isFinite(desired) || desired <= 0) return 1;
+  if (!r.servings || r.servings <= 0) return 1;
+  return desired / r.servings;
+}
+
+function renderScaledIngredients() {
+  const r = activeRecipe();
+  if (!r) return;
+
+  const desired = parseFloat(desiredServings.value);
+  const wantsScaling = Number.isFinite(desired) && desired > 0;
+
+  // Recipes saved before servings were validated can hold null, which would
+  // divide to Infinity and render "Infinity g flour".
+  if (wantsScaling && (!r.servings || r.servings <= 0)) {
+    scaleNote.textContent = `"${r.name}" has no original serving count — edit it and set one first.`;
+    scaleNote.classList.remove("d-none");
+    resetScaleBtn.classList.add("d-none");
+    renderIngredients(r.ingredients);
+    return;
+  }
+
+  const factor = currentScaleFactor();
+  renderIngredients(r.ingredients, factor);
+
+  const scaled = factor !== 1;
+  resetScaleBtn.classList.toggle("d-none", !scaled);
+  scaleNote.classList.toggle("d-none", !scaled);
+  if (scaled) {
+    scaleNote.textContent = `Scaled from ${r.servings} to ${formatAmount(desired)} servings `
+      + `(×${formatAmount(factor)}).`;
+  }
+}
+
+// Live, so there is no "did I press the button?" moment.
+desiredServings.addEventListener("input", renderScaledIngredients);
+
+resetScaleBtn.addEventListener("click", () => {
+  desiredServings.value = "";
+  renderScaledIngredients();
+  desiredServings.focus();
+});
+
 function showRecipe(id) {
   const r = store.find(id);
-  // The id can be stale — a recipe deleted on another device, or a dropdown
+  // The id can be stale — a recipe deleted on another device, or the list
   // rebuilt mid-interaction. Hide rather than throw.
   if (!r) {
     currentRecipeId = null;
     recipeDisplay.classList.add("d-none");
+    renderRecipeList();
     return;
   }
   currentRecipeId = id;
   currentPublic = null;
   recipeName.textContent = r.name;
   originalServings.textContent = r.servings;
+  publicByline.textContent = "";
   desiredServings.value = "";
-  renderIngredients(r.ingredients);
+  renderScaledIngredients();
   recipeDisplay.classList.remove("d-none");
-  recipeSelect.value = id;
+  renderRecipeList();
   renderOwnershipControls();
 }
 
@@ -227,20 +291,21 @@ function showPublicRecipe(entry) {
   currentPublic = entry;
   recipeName.textContent = entry.name;
   originalServings.textContent = entry.servings;
+  publicByline.textContent = entry.publishedBy ? ` · published by ${entry.publishedBy}` : "";
   desiredServings.value = "";
-  renderIngredients(entry.ingredients);
+  renderScaledIngredients();
   recipeDisplay.classList.remove("d-none");
-  recipeSelect.value = "";
+  renderRecipeList();
   renderOwnershipControls();
 }
 
 // Edit, delete and publish only make sense for your own recipes.
 function renderOwnershipControls() {
-  const mine = !!store.find(currentRecipeId);
+  const recipe = store.find(currentRecipeId);
+  const mine = !!recipe;
   editRecipeBtn.classList.toggle("d-none", !mine);
   deleteRecipeBtn.classList.toggle("d-none", !mine);
 
-  const recipe = store.find(currentRecipeId);
   const published = !!recipe?.publishedAs;
   // Publishing needs an identity, so these stay hidden until you sign in.
   const canPublish = mine && sync.signedIn();
@@ -250,20 +315,6 @@ function renderOwnershipControls() {
   // stale. Without this there would be no way to refresh it.
   publishBtn.textContent = published ? "🌍 Update public copy" : "🌍 Publish";
 }
-
-// --- Scaling ---
-scaleBtn.addEventListener("click", () => {
-  const desired = parseFloat(desiredServings.value);
-  const r = activeRecipe();
-  if (!desired || desired <= 0 || !r) return;
-  // Recipes saved before servings were validated can hold null, which would
-  // divide to Infinity and render "Infinity g flour".
-  if (!r.servings || r.servings <= 0) {
-    notify(`"${r.name}" has no original serving count — edit it and set one first.`, "warning");
-    return;
-  }
-  renderIngredients(r.ingredients, desired / r.servings);
-});
 
 // --- Ingredient form rows ---
 const measurementUnits = [
@@ -437,31 +488,27 @@ confirmDeleteBtn.addEventListener("click", () => {
   // other devices.
   queueSync(deletedId);
 
-  recipeSelect.value = "";
   recipeDisplay.classList.add("d-none");
+  renderRecipeList();
   modal("deleteModal").hide();
 });
 
-// --- Selection ---
-recipeSelect.addEventListener("change", e => {
-  if (e.target.value) {
-    showRecipe(e.target.value);
-    clearSearch();
-  }
+// --- Search ---
+clearSearchBtn.addEventListener("click", () => {
+  clearSearch();
+  searchInput.focus();
 });
 
-clearSearchBtn.addEventListener("click", () => clearSearch());
-
 searchInput.addEventListener("input", () => {
-  const keyword = searchInput.value.trim();
-  handleSearch(keyword);
+  renderRecipeList();
 
-  // Hide the display if the recipe on screen is no longer in the filtered set.
+  // Hide the display if the recipe on screen is no longer in the filtered set,
+  // so the list and the open recipe never disagree.
+  const keyword = searchInput.value.trim();
   const current = store.find(currentRecipeId);
   if (current && keyword && !current.name.toLowerCase().includes(keyword.toLowerCase())) {
     recipeDisplay.classList.add("d-none");
     currentRecipeId = null;
-    recipeSelect.value = "";
   }
 });
 
@@ -668,17 +715,77 @@ signInBtn.addEventListener("click", async () => {
     // Signing in swaps to this person's own recipes, so the view must be rebuilt
     // rather than left pointing at the previous person's recipe.
     showRecipe(null);
+    await settleSignedOutRecipes();
     notify(`Signed in as ${sync.person}. Syncing…`, "success");
     await pullAndFlush();
   } catch (err) {
-    if (err.status === 401) {
-      showAuthError("That passphrase was not recognised.");
-    } else {
-      showAuthError("Could not reach the server. Your recipes are safe on this device.");
-    }
+    showAuthError(signInErrorMessage(err));
   }
   renderAuthState();
 });
+
+// Recipes saved before signing in belong to whoever was using the device, not
+// automatically to the account they happen to sign into. Resolves once the
+// person has chosen.
+function askAdoption(count, person) {
+  return new Promise(resolve => {
+    adoptCount.textContent = String(count);
+    adoptPerson.textContent = person;
+    adoptVerb.textContent = count === 1 ? "is" : "are";
+    adoptNoun.textContent = count === 1 ? "recipe" : "recipes";
+
+    const finish = choice => {
+      adoptAddBtn.removeEventListener("click", onAdd);
+      adoptKeepBtn.removeEventListener("click", onKeep);
+      modal("adoptModal").hide();
+      resolve(choice);
+    };
+    const onAdd = () => finish(true);
+    const onKeep = () => finish(false);
+
+    adoptAddBtn.addEventListener("click", onAdd);
+    adoptKeepBtn.addEventListener("click", onKeep);
+    modal("adoptModal").show();
+  });
+}
+
+async function settleSignedOutRecipes() {
+  if (!sync.signedIn() || store.hasNamespace(sync.person)) return;
+
+  const count = store.signedOutCount();
+  if (count === 0) {
+    // Write an empty cookbook so this person counts as known and is not asked
+    // again on every sign-in.
+    store.save();
+    return;
+  }
+
+  if (await askAdoption(count, sync.person)) {
+    const added = store.adoptSignedOut(sync.person);
+    notify(`Added ${added} recipe${added === 1 ? "" : "s"} to ${sync.person}'s cookbook.`,
+           "success");
+  } else {
+    store.save();
+    notify("Kept separate — they are still here when you sign out.", "info");
+  }
+  renderRecipeList();
+}
+
+// Says what actually went wrong and what still works, rather than a shrug.
+function signInErrorMessage(err) {
+  if (err.status === 401) return "That passphrase was not recognised.";
+  if (!navigator.onLine) {
+    return "You appear to be offline. Signing in needs a connection — recipes already "
+         + "on this device still open and scale as normal. Try again once you reconnect.";
+  }
+  if (err.status === undefined) {
+    return "Couldn't reach the server. It may be down, or your network may be blocking "
+         + "it — some university and workplace networks block netlify.app. Recipes "
+         + "already on this device are unaffected.";
+  }
+  return `The server replied with an error (${err.status}). Recipes already on this `
+       + "device are unaffected; please try again shortly.";
+}
 
 async function pullAndFlush() {
   try {
@@ -697,7 +804,11 @@ async function pullAndFlush() {
     if (currentRecipeId) showRecipe(currentRecipeId);
   } catch (err) {
     sync.offline = err.status === undefined;
-    notify("Sync unavailable. Everything still works offline.", "warning");
+    notify(navigator.onLine
+      ? `Sync unavailable (${err.status ?? "no response"}). Your recipes still work here, `
+        + "and changes will be sent when it comes back."
+      : "You're offline. Your recipes still work here, and changes will be sent when "
+        + "you reconnect.", "warning");
   }
   renderAuthState();
 }
@@ -826,6 +937,45 @@ window.addEventListener("online", () => {
   if (sync.signedIn()) pullAndFlush();
 });
 
+// --- Theme ---
+// Follows the system setting until the person chooses; after that their choice
+// wins on this device.
+const THEME_KEY = "theme";
+
+function systemTheme() {
+  return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark" : "light";
+}
+
+function activeTheme() {
+  return localStorage.getItem(THEME_KEY) || systemTheme();
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-bs-theme", theme);
+  themeBtn.textContent = theme === "dark" ? "☀️" : "🌙";
+  themeBtn.setAttribute("aria-label",
+    theme === "dark" ? "Switch to light theme" : "Switch to dark theme");
+  // Keep the browser chrome in step with the page on mobile.
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", theme === "dark" ? "#212529" : "#e91e63");
+}
+
+themeBtn.addEventListener("click", () => {
+  const next = activeTheme() === "dark" ? "light" : "dark";
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
+});
+
+// Track the system setting for as long as no explicit choice has been made.
+if (window.matchMedia) {
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (!localStorage.getItem(THEME_KEY)) applyTheme(systemTheme());
+  });
+}
+
+applyTheme(activeTheme());
+
 // --- Init ---
 // Load the remembered person's recipes straight away. Loading the signed-out set
 // first and switching after the whoami round trip would briefly show the wrong
@@ -839,7 +989,11 @@ renderAuthState();
 // Nothing here blocks first paint.
 sync.resume().then(async ok => {
   renderAuthState();
-  if (ok) await pullAndFlush();
+  if (!ok) return;
+  // Also asked here, so someone who signed in on another device and only later
+  // opens this one still gets the choice rather than a silent merge.
+  await settleSignedOutRecipes();
+  await pullAndFlush();
 });
 
 // Module scope is not global, so tests need a deliberate seam. DOM elements are
@@ -847,9 +1001,11 @@ sync.resume().then(async ok => {
 window.__app = {
   store, sync, migrate, newId, SCHEMA_VERSION, buildExportPayload,
   activeStorageKey, showAuthError, hideAuthError, setPassphraseVisible,
+  settleSignedOutRecipes, askAdoption, signInErrorMessage,
   showRecipe, showPublicRecipe, renderRecipeList, renderTrash, renderPublicList,
   renderAuthState, renderOwnershipControls, pullAndFlush,
-  handleSearch, clearSearch, notify, dismissBanner, modal, addIngredientField,
+  clearSearch, notify, dismissBanner, modal, addIngredientField,
+  renderScaledIngredients, formatAmount, formatIngredient, applyTheme, activeTheme,
   get currentRecipeId() { return currentRecipeId; },
   get currentPublic() { return currentPublic; }
 };

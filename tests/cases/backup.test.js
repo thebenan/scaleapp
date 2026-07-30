@@ -57,7 +57,7 @@ check("restore bumps updatedAt past the tombstone",
 check("restored recipe is displayed", recipeName.textContent === "Deleted One",
       recipeName.textContent);
 check("restored recipe is back in the dropdown",
-      [...recipeSelect.options].some(o => o.value === "r-gone"));
+      [...recipeList.children].some(el => el.dataset.recipeId === "r-gone"));
 check("restore persisted",
       JSON.parse(localStorage.getItem("recipes")).recipes
         .find(r => r.id === "r-gone").deletedAt === null);

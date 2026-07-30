@@ -32,10 +32,12 @@ RUNNER_HEAD = """
 const app = window.__app;
 const { store, sync, migrate, newId, SCHEMA_VERSION, buildExportPayload,
         activeStorageKey, showAuthError, hideAuthError, setPassphraseVisible,
+        settleSignedOutRecipes, askAdoption, signInErrorMessage,
         showRecipe, showPublicRecipe, renderRecipeList, renderTrash, renderPublicList,
         renderAuthState, renderOwnershipControls, pullAndFlush,
-        handleSearch, clearSearch, notify, dismissBanner, modal,
-        addIngredientField } = app;
+        clearSearch, notify, dismissBanner, modal, addIngredientField,
+        renderScaledIngredients, formatAmount, formatIngredient,
+        applyTheme, activeTheme } = app;
 
 const __results = [];
 function check(label, cond, detail) {

@@ -9,4 +9,105 @@
   display: flex;
   justify-content: center;
   align-items: center;
+  z-index: 1030;
+}
+
+/* The add button is fixed, so without this it sits on top of whatever is at the
+   bottom of a long page — usually the delete button. */
+body {
+  padding-bottom: 100px;
+}
+
+/* Brand colour. Bootstrap 5.3 drives its components from CSS variables, so the
+   accent can be changed without recompiling or fighting specificity. The pink
+   was already in the manifest and the app icon while every button was default
+   blue, which made the two look like different apps. */
+:root {
+  --brand: #e91e63;
+  --brand-hover: #c2185b;
+  --brand-shadow: rgba(233, 30, 99, 0.35);
+}
+
+.btn-primary {
+  --bs-btn-bg: var(--brand);
+  --bs-btn-border-color: var(--brand);
+  --bs-btn-hover-bg: var(--brand-hover);
+  --bs-btn-hover-border-color: var(--brand-hover);
+  --bs-btn-active-bg: var(--brand-hover);
+  --bs-btn-active-border-color: var(--brand-hover);
+  --bs-btn-disabled-bg: var(--brand);
+  --bs-btn-disabled-border-color: var(--brand);
+}
+
+.btn-outline-primary {
+  --bs-btn-color: var(--brand);
+  --bs-btn-border-color: var(--brand);
+  --bs-btn-hover-bg: var(--brand);
+  --bs-btn-hover-border-color: var(--brand);
+  --bs-btn-active-bg: var(--brand);
+  --bs-btn-active-border-color: var(--brand);
+}
+
+.form-control:focus,
+.form-select:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 0.25rem var(--brand-shadow);
+}
+
+/* Selected recipe in the list */
+.list-group-item-action.active {
+  background-color: var(--brand);
+  border-color: var(--brand);
+}
+
+/* The original amount, shown beside the scaled one so scaling is never a
+   one-way door. */
+.original-amount {
+  opacity: 0.6;
+  font-size: 0.85em;
+  margin-left: 0.4em;
+}
+
+/* bg-light on <body> is near-white and stays that way in dark mode, so the page
+   background has to follow the theme instead. */
+[data-bs-theme="dark"] body {
+  background-color: #1a1d20 !important;
+}
+
+[data-bs-theme="dark"] .navbar {
+  background-color: #212529 !important;
+}
+
+@media print {
+  /* On paper a recipe is its ingredients. Everything else is chrome. */
+  .navbar,
+  #addRecipeBtn,
+  #banner,
+  #recipeList,
+  #emptyState,
+  #publicPanel,
+  #trashPanel,
+  #publicBtn,
+  #exportBtn,
+  #importBtn,
+  #trashBtn,
+  #buildStamp,
+  .input-group,
+  .card-body .d-flex {
+    display: none !important;
+  }
+
+  body {
+    padding-bottom: 0;
+    background: #fff !important;
+  }
+
+  .card {
+    border: none !important;
+  }
+
+  /* The scaled amounts are the reason for printing; originals are clutter. */
+  .original-amount {
+    display: none;
+  }
 }

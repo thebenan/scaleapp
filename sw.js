@@ -11,6 +11,7 @@ const SHELL = [
   "/script.js",
   "/storage.js",
   "/sync.js",
+  "/format.js",
   "/manifest.json",
   "/vendor/bootstrap.min.css",
   "/vendor/bootstrap.bundle.min.js"

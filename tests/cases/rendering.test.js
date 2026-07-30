@@ -1,30 +1,32 @@
 // Rendering, scaling, escaping and input validation.
 
-check("dropdown lists both recipes", recipeSelect.options.length === 3,
-      "options=" + recipeSelect.options.length);
+check("the list shows both recipes", recipeList.children.length === 2,
+      "items=" + recipeList.children.length);
+check("empty state is hidden when there are recipes",
+      emptyState.classList.contains("d-none"));
 check("footer shows recipe count", /2 recipes/.test(buildStamp.textContent),
       buildStamp.textContent);
 
 // Unscaled render, including "to taste" for a null amount.
 showRecipe(store.recipes[0].id);
-const rows = [...ingredientsList.children].map(li => li.textContent);
+const rows = [...ingredientsList.children].map(li => li.querySelector('.ingredient-text').textContent);
 check("renders unscaled amounts", rows[0] === "200 g flour", rows[0]);
 check("null amount omits the number", rows[2] === "salt", JSON.stringify(rows[2]));
 
 // Scaling 4 -> 6 servings.
 desiredServings.value = "6";
-scaleBtn.click();
-const scaled = [...ingredientsList.children].map(li => li.textContent);
+desiredServings.dispatchEvent(new Event("input"));
+const scaled = [...ingredientsList.children].map(li => li.querySelector('.ingredient-text').textContent);
 check("scales by servings ratio", scaled[0] === "300 g flour", scaled[0]);
 check("strips trailing zeros", scaled[1] === "450 ml milk", scaled[1]);
 check("null amount still omits number", scaled[2] === "salt", JSON.stringify(scaled[2]));
 
 // Scaling must not compound when clicked repeatedly.
-scaleBtn.click();
-scaleBtn.click();
+desiredServings.dispatchEvent(new Event("input"));
+desiredServings.dispatchEvent(new Event("input"));
 check("scaling is not cumulative",
-      [...ingredientsList.children][0].textContent === "300 g flour",
-      [...ingredientsList.children][0].textContent);
+      [...ingredientsList.children][0].querySelector('.ingredient-text').textContent === "300 g flour",
+      [...ingredientsList.children][0].querySelector('.ingredient-text').textContent);
 
 // A recipe name is user input and must never become markup.
 showRecipe(store.recipes[1].id);
@@ -66,8 +68,9 @@ store.recipes.push({ id: "legacy-id", name: "Legacy", servings: null, deletedAt:
                ingredients: [{ id: "legacy-ing", name: "x", amount: 1, unit: "g" }] });
 showRecipe("legacy-id");
 desiredServings.value = "2";
-scaleBtn.click();
+desiredServings.dispatchEvent(new Event("input"));
 check("no-servings recipe warns instead of Infinity",
-      /serving count/i.test(bannerText.textContent)
+      /serving count/i.test(scaleNote.textContent)
+        && !scaleNote.classList.contains("d-none")
         && !ingredientsList.textContent.includes("Infinity"),
-      bannerText.textContent + " | " + ingredientsList.textContent);
+      scaleNote.textContent + " | " + ingredientsList.textContent);

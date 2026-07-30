@@ -8,6 +8,10 @@ Sign in with a passphrase to get your own cookbook, synced across your devices
 and usable offline. You can publish a copy of a recipe so anyone can read it
 without signing in.
 
+Each person's recipes are stored under their own key, so two people can share a
+browser without seeing each other's cookbooks. Recipes saved before signing in
+stay separate unless you choose to add them to an account.
+
 ## Run it locally
 
 ```sh
@@ -59,6 +63,7 @@ One-time, per clone. Skips itself if Chrome isn't installed; bypass with
 |---|---|
 | `storage.js` | recipes, migrations, persistence. Knows nothing about the DOM |
 | `sync.js` | pull/push, conflict resolution, offline outbox, publishing |
+| `format.js` | amounts as a cook would write them (`1½ cup`, not `1.50`) |
 | `script.js` | all the UI |
 | `api/core.mjs` | server logic. No Netlify imports, so it runs anywhere |
 | `netlify/functions/api.mjs` | thin adapter: Netlify Blobs + env vars |

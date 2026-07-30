@@ -7,6 +7,14 @@ await fetch("/api/__reset", { method: "POST" });
 await sync.signIn("test-passphrase");
 check("signed in as the admin", sync.person === "tester" && sync.admin === true);
 
+// Signing in no longer adopts the device's recipes silently, so accept the offer
+// explicitly — this is the "existing user signs in for the first time" path.
+const __adoption = settleSignedOutRecipes();
+await waitFor(() => adoptCount.textContent !== "");
+adoptAddBtn.click();
+await __adoption;
+
+
 // --- publishing copies rather than moves ---
 const mine = store.find("mine-1");
 const publicId = await sync.publish(mine);
@@ -51,9 +59,9 @@ check("edit is hidden for a public recipe", editRecipeBtn.classList.contains("d-
 check("delete is hidden for a public recipe", deleteRecipeBtn.classList.contains("d-none"));
 check("scaling still works on a public recipe", (() => {
   desiredServings.value = "16";
-  scaleBtn.click();
-  return [...ingredientsList.children][0].textContent === "600 g flour";
-})(), [...ingredientsList.children][0]?.textContent);
+  desiredServings.dispatchEvent(new Event("input"));
+  return [...ingredientsList.children][0].querySelector('.ingredient-text').textContent === "600 g flour";
+})(), [...ingredientsList.children][0]?.querySelector('.ingredient-text').textContent);
 
 // --- unpublishing ---
 showRecipe("mine-1");
