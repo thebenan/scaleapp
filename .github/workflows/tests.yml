@@ -1,0 +1,40 @@
+name: tests
+
+# Netlify builds every push to main regardless of whether anything works, so
+# this is the only thing standing between a broken commit and production. Work
+# on a branch, open a PR, and merge when this is green.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Supersede in-flight runs for the same ref instead of paying for both.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # tests/run.sh probes for google-chrome and chromium. The runner image
+      # normally ships Chrome, but ubuntu-latest moves between Ubuntu releases
+      # and on 24.04 the apt `chromium` package is a snap shim that will not run
+      # headless in CI — so fall back to Google's own .deb rather than apt.
+      - name: Ensure a headless browser is available
+        run: |
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "using preinstalled $(google-chrome --version)"
+            exit 0
+          fi
+          echo "no browser found, installing Google Chrome"
+          wget -qO /tmp/chrome.deb \
+            https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq /tmp/chrome.deb
+          google-chrome --version
+
+      - name: Run test suite
+        run: ./tests/run.sh

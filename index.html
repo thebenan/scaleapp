@@ -21,6 +21,13 @@
 
   <div class="container py-3">
 
+    <!-- Status surface. Replaces alert(), which blocks the main thread and is
+         jarring on a phone; sync will report into here too. -->
+    <div id="banner" class="alert alert-dismissible d-none" role="alert" aria-live="polite">
+      <span id="bannerText"></span>
+      <button type="button" class="btn-close" id="bannerClose" aria-label="Dismiss"></button>
+    </div>
+
     <!-- Search + Dropdown -->
     <div class="mb-3">
       <div class="position-relative">
@@ -55,6 +62,21 @@
             <button id="deleteRecipeBtn" class="btn btn-danger">🗑️ Delete</button>
         </div>
 
+      </div>
+    </div>
+
+    <!-- Backup and recovery -->
+    <div class="d-flex flex-wrap gap-2 mt-4">
+      <button id="exportBtn" class="btn btn-outline-secondary btn-sm">⬇️ Export backup</button>
+      <button id="importBtn" class="btn btn-outline-secondary btn-sm">⬆️ Import backup</button>
+      <input type="file" id="importFile" accept="application/json,.json" class="d-none">
+      <button id="trashBtn" class="btn btn-outline-secondary btn-sm">🗑️ Recently deleted</button>
+    </div>
+
+    <div id="trashPanel" class="card mt-2 d-none">
+      <div class="card-body">
+        <h6 class="card-title">Recently deleted</h6>
+        <div id="trashList" class="list-group"></div>
       </div>
     </div>
 

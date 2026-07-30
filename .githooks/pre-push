@@ -1,0 +1,33 @@
+#!/bin/sh
+# Runs the browser suite before every push. Enable it on a fresh clone with:
+#
+#     git config core.hooksPath .githooks
+#
+# Bypass a single push with `git push --no-verify`.
+
+# Don't block a push just because this machine can't run browser tests — CI is
+# the backstop for that case. Only a genuine test failure should stop you.
+if ! command -v google-chrome >/dev/null 2>&1 \
+  && ! command -v chromium >/dev/null 2>&1 \
+  && ! command -v chromium-browser >/dev/null 2>&1 \
+  && ! command -v google-chrome-stable >/dev/null 2>&1; then
+  echo "pre-push: no Chrome/Chromium here, skipping tests (CI will run them)"
+  exit 0
+fi
+
+echo "pre-push: running test suite..."
+if ./tests/run.sh; then
+  exit 0
+fi
+
+cat >&2 <<'MSG'
+
+pre-push: tests failed, push aborted.
+
+Netlify deploys every push to main, so this would have gone live broken.
+Fix the failures above, or push anyway with:
+
+    git push --no-verify
+
+MSG
+exit 1

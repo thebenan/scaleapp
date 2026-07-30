@@ -10,3 +10,13 @@
   for = "/*"
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
+
+    # Everything is same-origin now that Bootstrap is vendored, so a strict
+    # policy costs nothing. This closes the XSS class structurally instead of
+    # relying on having found every innerHTML by hand.
+    #   style-src unsafe-inline: index.html has one inline style attribute
+    #   img-src data:           Bootstrap CSS embeds 23 inline SVG data URIs
+    #                           for select arrows and close buttons
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"

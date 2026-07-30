@@ -1,5 +1,47 @@
 // Local storage key
 const STORAGE_KEY = "recipes";
+const SCHEMA_VERSION = 3;
+
+// v1 was a bare array of {name, servings, ingredients} with no identity at all.
+// v2 wraps it in an envelope and gives every recipe and ingredient a permanent
+// id, a modified time, and a tombstone field.
+function newId() {
+  // randomUUID needs a secure context, which a bare http:// LAN address is not
+  // — that's the case when testing a phone against a laptop dev server.
+  if (crypto.randomUUID) return crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+// Idempotent by construction: existing ids and timestamps are preserved, so
+// this is safe to run on every load forever.
+function migrate(parsed) {
+  const list = Array.isArray(parsed) ? parsed
+    : (parsed && Array.isArray(parsed.recipes) ? parsed.recipes : []);
+  const now = Date.now();
+  return list.map(r => ({
+    id: r.id || newId(),
+    name: r.name ?? "",
+    servings: r.servings,
+    ingredients: (r.ingredients || []).map(ing => ({
+      id: ing.id || newId(),
+      name: ing.name ?? "",
+      amount: ing.amount ?? null,
+      unit: ing.unit ?? ""
+    })),
+    updatedAt: r.updatedAt || now,
+    // A deleted recipe is kept as a tombstone rather than spliced out. Without
+    // it, one device's delete is undone by another device that still has the
+    // recipe locally and syncs it back.
+    deletedAt: r.deletedAt ?? null,
+    // v3. Everything starts private, so turning sync on never dumps one
+    // person's collection into anyone else's view — publishing is deliberate.
+    visibility: r.visibility === "public" ? "public" : "private",
+    owner: r.owner ?? null,
+    // publicId of the published copy, or null. Publishing copies rather than
+    // moves, so the private original and the public snapshot are independent.
+    publishedAs: r.publishedAs ?? null
+  }));
+}
 
 // Guarded, because an unparseable value here used to throw before a single
 // handler was attached — bricking the app with no way back. Stash the raw
@@ -9,9 +51,7 @@ function loadRecipes() {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (raw === null) return [];
   try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) throw new Error("saved value is not an array");
-    return parsed;
+    return migrate(JSON.parse(raw));
   } catch (err) {
     console.error("Could not read saved recipes:", err);
     localStorage.setItem(`${STORAGE_KEY}.corrupt.${Date.now()}`, raw);
@@ -20,9 +60,18 @@ function loadRecipes() {
   }
 }
 
-// State
+// State. `recipes` holds tombstones too; everything user-facing goes through
+// liveRecipes().
 let recipes = loadRecipes();
-let currentRecipeIndex = null;
+let currentRecipeId = null;
+
+function liveRecipes() {
+  return recipes.filter(r => !r.deletedAt);
+}
+
+function findRecipe(id) {
+  return recipes.find(r => r.id === id && !r.deletedAt) || null;
+}
 
 // DOM elements
 const recipeSelect = document.getElementById("recipeSelect");
@@ -59,6 +108,40 @@ const saveRecipeBtn = document.getElementById("saveRecipeBtn");
 const deleteRecipeName = document.getElementById("deleteRecipeName");
 const confirmDeleteBtn = document.getElementById("confirmDeleteBtn");
 
+const banner = document.getElementById("banner");
+const bannerText = document.getElementById("bannerText");
+const bannerClose = document.getElementById("bannerClose");
+const exportBtn = document.getElementById("exportBtn");
+const importBtn = document.getElementById("importBtn");
+const importFile = document.getElementById("importFile");
+const trashBtn = document.getElementById("trashBtn");
+const trashPanel = document.getElementById("trashPanel");
+const trashList = document.getElementById("trashList");
+
+// Replaces alert(): non-blocking, and somewhere for sync to report into.
+// Problems stay until dismissed; confirmations clear themselves.
+const BANNER_CLASSES = {
+  info: "alert-info", success: "alert-success",
+  warning: "alert-warning", error: "alert-danger"
+};
+let bannerTimer = null;
+
+function notify(message, kind = "info") {
+  clearTimeout(bannerTimer);
+  bannerText.textContent = message;
+  banner.className = `alert alert-dismissible ${BANNER_CLASSES[kind] || BANNER_CLASSES.info}`;
+  if (kind === "info" || kind === "success") {
+    bannerTimer = setTimeout(dismissBanner, 4000);
+  }
+}
+
+function dismissBanner() {
+  clearTimeout(bannerTimer);
+  banner.classList.add("d-none");
+}
+
+bannerClose.addEventListener("click", dismissBanner);
+
 // Stamped with the commit SHA at deploy time by the sed in netlify.toml. Left
 // as the literal placeholder when served straight off disk, which is how a
 // local checkout tells itself apart from a deploy.
@@ -68,11 +151,13 @@ const BUILD_ID = RAW_BUILD_ID.startsWith("__BUILD") ? "dev" : RAW_BUILD_ID.slice
 // Recipe count goes in the footer too: phones have no devtools, so this is the
 // only way to tell "storage was wiped" apart from "this device never had them".
 const buildStamp = document.getElementById("buildStamp");
-if (buildStamp) {
+function renderBuildStamp() {
+  if (!buildStamp) return;
   buildStamp.textContent = storageBroken
     ? `build ${BUILD_ID} · saved data unreadable, backed up`
-    : `build ${BUILD_ID} · ${recipes.length} recipes on this device`;
+    : `build ${BUILD_ID} · ${liveRecipes().length} recipes on this device`;
 }
+renderBuildStamp();
 
 // Asks the browser not to evict this origin's storage under pressure. Granted
 // automatically for installed PWAs; on iOS Safari it is the difference between
@@ -117,22 +202,31 @@ if (!localDev && "serviceWorker" in navigator && window.isSecureContext) {
     .catch(error => console.log("Service Worker registration failed:", error));
 }
 
-// Save state to localStorage
+// Save state to localStorage. Tombstones are written too — they are what stops
+// a delete being undone later.
 function saveRecipes() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(recipes));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    schemaVersion: SCHEMA_VERSION,
+    recipes
+  }));
   renderRecipeList();
+  renderBuildStamp();
 }
 
-// Render dropdown list (always shows all recipes)
+// Render dropdown list (always shows all live recipes)
 function renderRecipeList() {
   recipeSelect.innerHTML = `<option value="">-- Select recipe --</option>`;
-  
-  recipes.forEach((r, i) => {
+
+  liveRecipes().forEach(r => {
     const option = document.createElement("option");
-    option.value = i;
+    option.value = r.id;
     option.textContent = r.name;
     recipeSelect.appendChild(option);
   });
+
+  // Keep the dropdown pointing at whatever is on screen; rebuilding the options
+  // otherwise resets it to the placeholder.
+  recipeSelect.value = currentRecipeId ?? "";
 }
 
 // Handle search and show filtered results
@@ -145,23 +239,22 @@ function handleSearch(filterKeyword = '') {
   }
   
   if (filterKeyword.trim()) {
-    const filteredRecipes = recipes.filter(recipe => 
+    const filteredRecipes = liveRecipes().filter(recipe =>
       recipe.name.toLowerCase().includes(filterKeyword.toLowerCase())
     );
-    
+
     searchResults.classList.remove("d-none");
     searchResultsList.innerHTML = "";
-    
+
     if (filteredRecipes.length === 0) {
       searchResultsList.innerHTML = '<div class="list-group-item">No recipes found</div>';
     } else {
       filteredRecipes.forEach((r) => {
-        const originalIndex = recipes.indexOf(r);
         const item = document.createElement("div");
         item.className = "list-group-item list-group-item-action";
         item.textContent = r.name;
         item.onclick = () => {
-          showRecipe(originalIndex);
+          showRecipe(r.id);
           // Clear search and hide results when recipe is selected
           clearSearch();
         };
@@ -199,25 +292,33 @@ function renderIngredients(ingredients, factor = 1) {
 }
 
 // Display selected recipe
-function showRecipe(index) {
-  currentRecipeIndex = index;
-  const r = recipes[index];
+function showRecipe(id) {
+  const r = findRecipe(id);
+  // The id can be stale — a recipe deleted on another device, or a dropdown
+  // rebuilt mid-interaction. Hide rather than throw.
+  if (!r) {
+    currentRecipeId = null;
+    recipeDisplay.classList.add("d-none");
+    return;
+  }
+  currentRecipeId = id;
   recipeName.textContent = r.name;
   originalServings.textContent = r.servings;
   desiredServings.value = "";
   renderIngredients(r.ingredients);
   recipeDisplay.classList.remove("d-none");
+  recipeSelect.value = id;
 }
 
 // Scale recipe
 scaleBtn.addEventListener("click", () => {
   const desired = parseFloat(desiredServings.value);
-  if (!desired || desired <= 0 || currentRecipeIndex === null) return;
-  const r = recipes[currentRecipeIndex];
+  const r = findRecipe(currentRecipeId);
+  if (!desired || desired <= 0 || !r) return;
   // Recipes saved before servings were validated can hold null, which would
   // divide to Infinity and render "Infinity g flour".
   if (!r.servings || r.servings <= 0) {
-    alert(`"${r.name}" has no original serving count — edit it and set one first.`);
+    notify(`"${r.name}" has no original serving count — edit it and set one first.`, "warning");
     return;
   }
   renderIngredients(r.ingredients, desired / r.servings);
@@ -281,6 +382,8 @@ function addIngredientField(ingredient = { name: '', amount: '', unit: '' }) {
   amountInput.step = 'any';
   amountInput.value = ingredient.amount ?? '';
 
+  div.dataset.ingredientId = ingredient.id || newId();
+
   const unitSelect = document.createElement('select');
   unitSelect.className = 'form-select ingredient-unit';
   unitSelect.style.maxWidth = '150px';
@@ -302,9 +405,14 @@ function addIngredientField(ingredient = { name: '', amount: '', unit: '' }) {
   ingredientsFields.appendChild(div);
 }
 
+// Which recipe the modal is editing, kept separate from which one is on screen.
+// Overloading a single variable meant opening "Add" while a recipe was displayed
+// silently disabled that recipe's own edit and delete buttons.
+let editingId = null;
+
 // Add recipe button
 addRecipeBtn.addEventListener("click", () => {
-  currentRecipeIndex = null;
+  editingId = null;
   modalTitle.textContent = "Add Recipe";
   recipeNameInput.value = "";
   servingsInput.value = "";
@@ -315,8 +423,9 @@ addRecipeBtn.addEventListener("click", () => {
 
 // Edit recipe button
 editRecipeBtn.addEventListener("click", () => {
-  if (currentRecipeIndex === null) return;
-  const r = recipes[currentRecipeIndex];
+  const r = findRecipe(currentRecipeId);
+  if (!r) return;
+  editingId = r.id;
   modalTitle.textContent = "Edit Recipe";
   recipeNameInput.value = r.name;
   servingsInput.value = r.servings;
@@ -336,12 +445,12 @@ saveRecipeBtn.addEventListener("click", () => {
   // and scaled to Infinity.
   if (!name) {
     recipeNameInput.focus();
-    alert("Give the recipe a name.");
+    notify("Give the recipe a name.", "warning");
     return;
   }
   if (!Number.isFinite(servings) || servings <= 0) {
     servingsInput.focus();
-    alert("Set how many servings this recipe makes.");
+    notify("Set how many servings this recipe makes.", "warning");
     return;
   }
 
@@ -352,46 +461,61 @@ saveRecipeBtn.addEventListener("click", () => {
     const unit = row.querySelector('.ingredient-unit').value;
     // null, not 0: a blank amount means "to taste", and 0 would scale an
     // ingredient to nothing.
-    return { name, amount: Number.isFinite(amount) ? amount : null, unit };
+    return {
+      // Carried on the row so an edit preserves ingredient identity. The
+      // instruction grid will reference these ids, so regenerating them on
+      // every save would silently detach steps from their ingredients.
+      id: row.dataset.ingredientId || newId(),
+      name,
+      amount: Number.isFinite(amount) ? amount : null,
+      unit
+    };
   }).filter(ing => ing.name);
 
-  const recipe = { name, servings, ingredients };
-
-  if (currentRecipeIndex === null) {
-    recipes.push(recipe);
+  const existing = findRecipe(editingId);
+  if (existing) {
+    Object.assign(existing, { name, servings, ingredients, updatedAt: Date.now() });
   } else {
-    recipes[currentRecipeIndex] = recipe;
+    const recipe = {
+      id: newId(), name, servings, ingredients,
+      updatedAt: Date.now(), deletedAt: null
+    };
+    recipes.push(recipe);
+    // Show what was just added. Previously the dropdown was rebuilt and reset
+    // to the placeholder, so a new recipe vanished the moment you saved it.
+    currentRecipeId = recipe.id;
   }
 
   saveRecipes();
   modal("recipeModal").hide();
-  
-  // If we were editing an existing recipe, refresh the display
-  if (currentRecipeIndex !== null) {
-    showRecipe(currentRecipeIndex);
-  }
+  showRecipe(currentRecipeId);
+  editingId = null;
 });
 
 addIngredientFieldBtn.addEventListener('click', () => addIngredientField());
 
 // Delete recipe
 deleteRecipeBtn.addEventListener("click", () => {
-  if (currentRecipeIndex === null) return;
+  const r = findRecipe(currentRecipeId);
+  if (!r) return;
 
-  const r = recipes[currentRecipeIndex];
   deleteRecipeName.textContent = r.name;
   modal("deleteModal").show();
 });
 
 // Confirm delete
 confirmDeleteBtn.addEventListener("click", () => {
-  if (currentRecipeIndex === null) return;
+  const r = findRecipe(currentRecipeId);
+  if (!r) return;
 
-  // Remove recipe, persist, and reset UI
-  recipes.splice(currentRecipeIndex, 1);
+  // Tombstoned, not spliced out. A removed entry looks identical to one that
+  // never arrived, so another device holding the recipe would sync it back.
+  r.deletedAt = Date.now();
+  r.updatedAt = r.deletedAt;
+
+  currentRecipeId = null;
   saveRecipes();
 
-  currentRecipeIndex = null;
   recipeSelect.value = "";
   // keep the current search filter; list already re-rendered in saveRecipes()
   recipeDisplay.classList.add("d-none");
@@ -401,7 +525,7 @@ confirmDeleteBtn.addEventListener("click", () => {
 // Handle dropdown select
 recipeSelect.addEventListener("change", e => {
   if (e.target.value) {
-    showRecipe(parseInt(e.target.value));
+    showRecipe(e.target.value);
     // Clear search and hide search results when recipe is selected from dropdown
     clearSearch();
   }
@@ -418,14 +542,131 @@ searchInput.addEventListener("input", () => {
   handleSearch(keyword);
   
   // Clear recipe display if current recipe is not in filtered results
-  if (currentRecipeIndex !== null && keyword) {
-    const currentRecipe = recipes[currentRecipeIndex];
-    if (!currentRecipe.name.toLowerCase().includes(keyword.toLowerCase())) {
+  const current = findRecipe(currentRecipeId);
+  if (current && keyword) {
+    if (!current.name.toLowerCase().includes(keyword.toLowerCase())) {
       recipeDisplay.classList.add("d-none");
-      currentRecipeIndex = null;
+      currentRecipeId = null;
       recipeSelect.value = "";
     }
   }
+});
+
+// --- Backup ---
+
+// Tombstones are included on purpose: importing a backup must not resurrect
+// recipes that were deleted after it was taken.
+function buildExportPayload() {
+  return {
+    app: "recipe-scaler",
+    schemaVersion: SCHEMA_VERSION,
+    exportedAt: new Date().toISOString(),
+    recipes
+  };
+}
+
+exportBtn.addEventListener("click", () => {
+  const payload = buildExportPayload();
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `recipes-${new Date().toISOString().slice(0, 10)}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+  notify(`Exported ${liveRecipes().length} recipes.`, "success");
+});
+
+// Merge by id, newest updatedAt wins. Deliberately additive — there is no
+// "replace everything" option, so importing a stale backup can never silently
+// destroy newer work. Use Recently deleted to bring back a specific recipe.
+function mergeRecipes(incoming) {
+  let added = 0, updated = 0, skipped = 0;
+  incoming.forEach(inc => {
+    const existing = recipes.find(r => r.id === inc.id);
+    if (!existing) {
+      recipes.push(inc);
+      added++;
+    } else if (inc.updatedAt > existing.updatedAt) {
+      Object.assign(existing, inc);
+      updated++;
+    } else {
+      skipped++;
+    }
+  });
+  return { added, updated, skipped };
+}
+
+importBtn.addEventListener("click", () => importFile.click());
+
+importFile.addEventListener("change", async () => {
+  const file = importFile.files[0];
+  if (!file) return;
+  try {
+    // migrate() accepts both the envelope and a bare v1 array, so old exports
+    // and hand-edited files both work.
+    const incoming = migrate(JSON.parse(await file.text()));
+    if (incoming.length === 0) {
+      notify("That file has no recipes in it.", "warning");
+      return;
+    }
+    const { added, updated, skipped } = mergeRecipes(incoming);
+    saveRecipes();
+    if (currentRecipeId) showRecipe(currentRecipeId);
+    notify(`Imported: ${added} added, ${updated} updated, ${skipped} already current.`, "success");
+  } catch (err) {
+    console.error("Import failed:", err);
+    notify("Could not read that file — it does not look like a Recipe Scaler backup.", "error");
+  } finally {
+    // Cleared so picking the same file again still fires a change event.
+    importFile.value = "";
+  }
+});
+
+// --- Recently deleted ---
+
+function renderTrash() {
+  const deleted = recipes.filter(r => r.deletedAt).sort((a, b) => b.deletedAt - a.deletedAt);
+  trashList.innerHTML = "";
+
+  if (deleted.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "list-group-item text-muted";
+    empty.textContent = "Nothing deleted.";
+    trashList.appendChild(empty);
+    return;
+  }
+
+  deleted.forEach(r => {
+    const row = document.createElement("div");
+    row.className = "list-group-item d-flex justify-content-between align-items-center gap-2";
+
+    const label = document.createElement("span");
+    label.textContent = `${r.name} · deleted ${new Date(r.deletedAt).toLocaleDateString()}`;
+
+    const restore = document.createElement("button");
+    restore.className = "btn btn-sm btn-outline-success restore-btn";
+    restore.textContent = "Restore";
+    restore.onclick = () => {
+      r.deletedAt = null;
+      // Must be newer than the tombstone, or last-write-wins would let another
+      // device's delete undo this restore on the next sync.
+      r.updatedAt = Date.now();
+      currentRecipeId = r.id;
+      saveRecipes();
+      renderTrash();
+      showRecipe(r.id);
+      notify(`Restored "${r.name}".`, "success");
+    };
+
+    row.append(label, restore);
+    trashList.appendChild(row);
+  });
+}
+
+trashBtn.addEventListener("click", () => {
+  trashPanel.classList.toggle("d-none");
+  if (!trashPanel.classList.contains("d-none")) renderTrash();
 });
 
 // Init
