@@ -142,8 +142,15 @@
             Your passphrase gives you your own cookbook, synced across your
             devices. You can browse public recipes without one.
           </p>
-          <input type="password" id="passphraseInput" class="form-control"
-                 placeholder="Passphrase" autocomplete="current-password">
+          <!-- Sign-in problems belong in here: the modal covers the page-level
+               banner, so a message behind it would never be seen. -->
+          <div id="authError" class="alert alert-danger py-2 px-3 small d-none" role="alert"></div>
+          <div class="input-group">
+            <input type="password" id="passphraseInput" class="form-control"
+                   placeholder="Passphrase" autocomplete="current-password">
+            <button type="button" id="togglePassphrase" class="btn btn-outline-secondary"
+                    aria-label="Show passphrase" aria-pressed="false">👁️</button>
+          </div>
         </div>
         <div class="modal-footer">
           <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>

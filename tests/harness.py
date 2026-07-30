@@ -31,6 +31,7 @@ RUNNER_HEAD = """
 // getter, so a destructured copy would go stale immediately).
 const app = window.__app;
 const { store, sync, migrate, newId, SCHEMA_VERSION, buildExportPayload,
+        activeStorageKey, showAuthError, hideAuthError, setPassphraseVisible,
         showRecipe, showPublicRecipe, renderRecipeList, renderTrash, renderPublicList,
         renderAuthState, renderOwnershipControls, pullAndFlush,
         handleSearch, clearSearch, notify, dismissBanner, modal,

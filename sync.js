@@ -8,11 +8,21 @@
 import { store, migrate, newId } from "./storage.js";
 
 const AUTH_KEY = "auth.passphrase";
+// Remembered so the right person's recipes load on startup, before the network
+// round trip that confirms the passphrase.
+const PERSON_KEY = "auth.person";
 const OUTBOX_KEY = "outbox";
+
+// Namespaced like the recipes themselves, or one person's unsent changes would
+// be attributed to whoever signs in next.
+function outboxKey() {
+  const person = localStorage.getItem(PERSON_KEY);
+  return person ? `${OUTBOX_KEY}.${person}` : OUTBOX_KEY;
+}
 
 function readOutbox() {
   try {
-    const raw = JSON.parse(localStorage.getItem(OUTBOX_KEY));
+    const raw = JSON.parse(localStorage.getItem(outboxKey()));
     return Array.isArray(raw) ? raw : [];
   } catch {
     return [];
@@ -20,7 +30,7 @@ function readOutbox() {
 }
 
 function writeOutbox(ids) {
-  localStorage.setItem(OUTBOX_KEY, JSON.stringify([...new Set(ids)]));
+  localStorage.setItem(outboxKey(), JSON.stringify([...new Set(ids)]));
 }
 
 export const sync = {
@@ -82,6 +92,10 @@ export const sync = {
       const { body } = await this.request("GET", "whoami");
       this.person = body.person;
       this.admin = !!body.admin;
+      localStorage.setItem(PERSON_KEY, body.person);
+      // Load this person's own recipes. Skipping this would leave the previous
+      // person's recipes in memory, and the outbox would upload them here.
+      store.useNamespace(body.person);
       return body;
     } catch (err) {
       // Never keep a passphrase the server rejected — it would 401 on every
@@ -95,9 +109,12 @@ export const sync = {
 
   signOut() {
     localStorage.removeItem(AUTH_KEY);
-    localStorage.removeItem(OUTBOX_KEY);
+    localStorage.removeItem(PERSON_KEY);
     this.person = null;
     this.admin = false;
+    // The outbox is deliberately kept: it is namespaced per person, so unsent
+    // changes are still waiting when they sign back in.
+    store.useNamespace(null);
   },
 
   // Resume a session on load without prompting.

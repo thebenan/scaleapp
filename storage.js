@@ -5,6 +5,15 @@
 const STORAGE_KEY = "recipes";
 export const SCHEMA_VERSION = 3;
 
+// localStorage is per-browser, not per-person, so each signed-in person gets
+// their own key. Without this, signing in as someone else on the same browser
+// leaves the previous person's recipes in the store — and the outbox then
+// uploads them into the second person's account.
+let activeKey = STORAGE_KEY;
+export function activeStorageKey() {
+  return activeKey;
+}
+
 export function newId() {
   // randomUUID needs a secure context, which a bare http:// LAN address is not
   // — that's the case when testing a phone against a laptop dev server.
@@ -58,8 +67,30 @@ export const store = {
   // True when the saved value could not be parsed, so the UI can say so.
   broken: false,
 
+  // Switch to a person's own recipes, or back to the signed-out set when person
+  // is null. Always reloads, so the in-memory list can never belong to someone
+  // other than whoever is signed in.
+  useNamespace(person) {
+    const nextKey = person ? `${STORAGE_KEY}.${person}` : STORAGE_KEY;
+
+    // First time this person signs in on this browser, adopt whatever was built
+    // up while signed out — that work is theirs, and losing it would be worse
+    // than the alternative. Moved, not copied, so the next person to sign in
+    // cannot inherit it too.
+    if (person && localStorage.getItem(nextKey) === null) {
+      const signedOutSet = localStorage.getItem(STORAGE_KEY);
+      if (signedOutSet !== null) {
+        localStorage.setItem(nextKey, signedOutSet);
+        localStorage.removeItem(STORAGE_KEY);
+      }
+    }
+
+    activeKey = nextKey;
+    return this.load();
+  },
+
   load() {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(activeKey);
     if (raw === null) {
       this.recipes = [];
       return this.recipes;
@@ -71,7 +102,7 @@ export const store = {
       // bricked the app. Stash the raw string rather than discarding it, so bad
       // data is never silently destroyed.
       console.error("Could not read saved recipes:", err);
-      localStorage.setItem(`${STORAGE_KEY}.corrupt.${Date.now()}`, raw);
+      localStorage.setItem(`${activeKey}.corrupt.${Date.now()}`, raw);
       this.broken = true;
       this.recipes = [];
     }
@@ -79,7 +110,7 @@ export const store = {
   },
 
   save() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    localStorage.setItem(activeKey, JSON.stringify({
       schemaVersion: SCHEMA_VERSION,
       recipes: this.recipes
     }));

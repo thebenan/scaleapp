@@ -127,5 +127,13 @@ check("a rejected passphrase is not kept",
       localStorage.getItem("auth.passphrase") === null,
       String(localStorage.getItem("auth.passphrase")));
 
-// Recipes must survive signing out — they live on the device, not the session.
-check("recipes survive sign out", store.live().length >= 2, String(store.live().length));
+// Signing out switches to the signed-out cookbook; it must not destroy anything.
+check("signed-out view is separate and empty", store.live().length === 0,
+      String(store.live().length));
+check("the recipes are still on disk under the person's own key",
+      JSON.parse(localStorage.getItem("recipes.tester")).recipes.length >= 2,
+      String(localStorage.getItem("recipes.tester")));
+
+await sync.signIn(PASS);
+check("recipes come back on signing in again", store.live().length >= 2,
+      String(store.live().length));

@@ -1,6 +1,6 @@
 import {
   store, migrate, newId, onStoreChange,
-  SCHEMA_VERSION, buildExportPayload
+  SCHEMA_VERSION, buildExportPayload, activeStorageKey
 } from "./storage.js";
 import { sync } from "./sync.js";
 
@@ -44,6 +44,8 @@ const buildStamp = document.getElementById("buildStamp");
 const authBtn = document.getElementById("authBtn");
 const syncStatus = document.getElementById("syncStatus");
 const passphraseInput = document.getElementById("passphraseInput");
+const togglePassphrase = document.getElementById("togglePassphrase");
+const authError = document.getElementById("authError");
 const signInBtn = document.getElementById("signInBtn");
 const publishBtn = document.getElementById("publishBtn");
 const unpublishBtn = document.getElementById("unpublishBtn");
@@ -614,30 +616,65 @@ function renderAuthState() {
   renderOwnershipControls();
 }
 
+function showAuthError(message) {
+  authError.textContent = message;
+  authError.classList.remove("d-none");
+}
+
+function hideAuthError() {
+  authError.classList.add("d-none");
+}
+
+// Passphrases are long and typed on phone keyboards, so let people check what
+// they typed. Resets to hidden every time the dialog opens.
+function setPassphraseVisible(visible) {
+  passphraseInput.type = visible ? "text" : "password";
+  togglePassphrase.setAttribute("aria-pressed", String(visible));
+  togglePassphrase.setAttribute("aria-label", visible ? "Hide passphrase" : "Show passphrase");
+  togglePassphrase.textContent = visible ? "🙈" : "👁️";
+}
+
+togglePassphrase.addEventListener("click", () => {
+  setPassphraseVisible(passphraseInput.type === "password");
+  passphraseInput.focus();
+});
+
 authBtn.addEventListener("click", async () => {
   if (sync.signedIn()) {
     sync.signOut();
     renderAuthState();
-    notify("Signed out. Your recipes stay on this device.", "info");
+    showRecipe(null);
+    notify("Signed out. Your recipes are waiting when you sign back in.", "info");
     return;
   }
   passphraseInput.value = "";
+  setPassphraseVisible(false);
+  hideAuthError();
   modal("authModal").show();
 });
 
+passphraseInput.addEventListener("input", hideAuthError);
+
 signInBtn.addEventListener("click", async () => {
   const passphrase = passphraseInput.value.trim();
-  if (!passphrase) return;
+  if (!passphrase) {
+    showAuthError("Enter your passphrase.");
+    return;
+  }
   try {
     await sync.signIn(passphrase);
+    hideAuthError();
     modal("authModal").hide();
+    // Signing in swaps to this person's own recipes, so the view must be rebuilt
+    // rather than left pointing at the previous person's recipe.
+    showRecipe(null);
     notify(`Signed in as ${sync.person}. Syncing…`, "success");
     await pullAndFlush();
   } catch (err) {
     if (err.status === 401) {
-      notify("That passphrase was not recognised.", "error");
+      showAuthError("That passphrase was not recognised.");
     } else {
-      notify("Could not reach the server. Your recipes are safe on this device.", "warning");
+      showAuthError("Could not reach the server. Your recipes are safe on this device.");
     }
   }
   renderAuthState();
@@ -790,7 +827,10 @@ window.addEventListener("online", () => {
 });
 
 // --- Init ---
-store.load();
+// Load the remembered person's recipes straight away. Loading the signed-out set
+// first and switching after the whoami round trip would briefly show the wrong
+// person's cookbook.
+store.useNamespace(localStorage.getItem("auth.person"));
 renderRecipeList();
 renderBuildStamp();
 renderAuthState();
@@ -806,6 +846,7 @@ sync.resume().then(async ok => {
 // still reachable as window.<id>; this exposes the behaviour.
 window.__app = {
   store, sync, migrate, newId, SCHEMA_VERSION, buildExportPayload,
+  activeStorageKey, showAuthError, hideAuthError, setPassphraseVisible,
   showRecipe, showPublicRecipe, renderRecipeList, renderTrash, renderPublicList,
   renderAuthState, renderOwnershipControls, pullAndFlush,
   handleSearch, clearSearch, notify, dismissBanner, modal, addIngredientField,
