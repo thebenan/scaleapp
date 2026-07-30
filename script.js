@@ -1,8 +1,27 @@
 // Local storage key
 const STORAGE_KEY = "recipes";
 
+// Guarded, because an unparseable value here used to throw before a single
+// handler was attached — bricking the app with no way back. Stash the raw
+// string rather than discarding it, so bad data is never silently destroyed.
+let storageBroken = false;
+function loadRecipes() {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (raw === null) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) throw new Error("saved value is not an array");
+    return parsed;
+  } catch (err) {
+    console.error("Could not read saved recipes:", err);
+    localStorage.setItem(`${STORAGE_KEY}.corrupt.${Date.now()}`, raw);
+    storageBroken = true;
+    return [];
+  }
+}
+
 // State
-let recipes = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+let recipes = loadRecipes();
 let currentRecipeIndex = null;
 
 // DOM elements
@@ -22,8 +41,15 @@ const editRecipeBtn = document.getElementById("editRecipeBtn");
 const deleteRecipeBtn = document.getElementById("deleteRecipeBtn");
 const addRecipeBtn = document.getElementById("addRecipeBtn");
 
-const recipeModal = new bootstrap.Modal(document.getElementById("recipeModal"));
-const deleteModal = new bootstrap.Modal(document.getElementById("deleteModal"));
+// Built on first use, not at parse time. Constructing these eagerly meant a
+// missing Bootstrap threw here and aborted the rest of the file, so the recipe
+// list never rendered — an app that looked empty rather than broken.
+const modals = {};
+function modal(id) {
+  if (!modals[id]) modals[id] = new bootstrap.Modal(document.getElementById(id));
+  return modals[id];
+}
+
 const modalTitle = document.getElementById("modalTitle");
 const recipeNameInput = document.getElementById("recipeNameInput");
 const servingsInput = document.getElementById("servingsInput");
@@ -33,14 +59,43 @@ const saveRecipeBtn = document.getElementById("saveRecipeBtn");
 const deleteRecipeName = document.getElementById("deleteRecipeName");
 const confirmDeleteBtn = document.getElementById("confirmDeleteBtn");
 
-// Stamped with the commit SHA at deploy time by the sed in netlify.toml.
-const BUILD_ID = "__BUILD_ID__";
+// Stamped with the commit SHA at deploy time by the sed in netlify.toml. Left
+// as the literal placeholder when served straight off disk, which is how a
+// local checkout tells itself apart from a deploy.
+const RAW_BUILD_ID = "__BUILD_ID__";
+const BUILD_ID = RAW_BUILD_ID.startsWith("__BUILD") ? "dev" : RAW_BUILD_ID.slice(0, 7);
 
+// Recipe count goes in the footer too: phones have no devtools, so this is the
+// only way to tell "storage was wiped" apart from "this device never had them".
 const buildStamp = document.getElementById("buildStamp");
-if (buildStamp) buildStamp.textContent = `build ${BUILD_ID.slice(0, 7)}`;
+if (buildStamp) {
+  buildStamp.textContent = storageBroken
+    ? `build ${BUILD_ID} · saved data unreadable, backed up`
+    : `build ${BUILD_ID} · ${recipes.length} recipes on this device`;
+}
+
+// Asks the browser not to evict this origin's storage under pressure. Granted
+// automatically for installed PWAs; on iOS Safari it is the difference between
+// recipes surviving a quiet week and being deleted by ITP.
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+
+// On localhost the build id is never substituted, so the cache name never
+// changes and the worker would serve stale files after every edit — the exact
+// "my changes don't show up" symptom this whole rewrite was fixing. Skip it
+// locally and tear down any worker a previous session left behind. Append
+// ?sw=1 when you actually want to test offline behaviour.
+const localDev = ["localhost", "127.0.0.1"].includes(location.hostname)
+  && !new URLSearchParams(location.search).has("sw");
+
+if (localDev && "serviceWorker" in navigator) {
+  navigator.serviceWorker.getRegistrations()
+    .then(regs => regs.forEach(r => r.unregister()))
+    .then(() => caches.keys().then(ks => Promise.all(ks.map(k => caches.delete(k)))))
+    .catch(() => {});
+}
 
 // Register Service Worker
-if ("serviceWorker" in navigator && window.isSecureContext) {
+if (!localDev && "serviceWorker" in navigator && window.isSecureContext) {
   // No controller at load time means this is a first install, and the
   // controllerchange that follows is expected — reloading on it would give
   // every brand-new visitor a gratuitous refresh.
@@ -125,6 +180,24 @@ function clearSearch() {
   searchResults.classList.add("d-none");
 }
 
+// Rows are built with textContent, not innerHTML. Recipe text is user input,
+// and once a cookbook is shared between people this stops being self-XSS and
+// becomes stored XSS.
+function renderIngredients(ingredients, factor = 1) {
+  ingredientsList.innerHTML = "";
+  ingredients.forEach(ing => {
+    const li = document.createElement("li");
+    li.className = "list-group-item";
+    // A null amount means "to taste" — show the name without inventing a 0.
+    const hasAmount = ing.amount !== null && ing.amount !== undefined;
+    // Unary + drops trailing zeros, so 2.00 reads as 2 but 0.33 survives.
+    const amount = hasAmount ? `${+(ing.amount * factor).toFixed(2)} ` : "";
+    const unit = ing.unit ? `${ing.unit} ` : "";
+    li.textContent = `${amount}${unit}${ing.name}`;
+    ingredientsList.appendChild(li);
+  });
+}
+
 // Display selected recipe
 function showRecipe(index) {
   currentRecipeIndex = index;
@@ -132,21 +205,22 @@ function showRecipe(index) {
   recipeName.textContent = r.name;
   originalServings.textContent = r.servings;
   desiredServings.value = "";
-  ingredientsList.innerHTML = r.ingredients.map(ing =>
-    `<li class="list-group-item">${ing.amount} ${ing.unit} ${ing.name}</li>`
-  ).join("");
+  renderIngredients(r.ingredients);
   recipeDisplay.classList.remove("d-none");
 }
 
 // Scale recipe
 scaleBtn.addEventListener("click", () => {
   const desired = parseFloat(desiredServings.value);
-  if (!desired || currentRecipeIndex === null) return;
+  if (!desired || desired <= 0 || currentRecipeIndex === null) return;
   const r = recipes[currentRecipeIndex];
-  ingredientsList.innerHTML = r.ingredients.map(ing => {
-    const scaled = (ing.amount * desired / r.servings).toFixed(2);
-    return `<li class="list-group-item">${scaled} ${ing.unit} ${ing.name}</li>`;
-  }).join("");
+  // Recipes saved before servings were validated can hold null, which would
+  // divide to Infinity and render "Infinity g flour".
+  if (!r.servings || r.servings <= 0) {
+    alert(`"${r.name}" has no original serving count — edit it and set one first.`);
+    return;
+  }
+  renderIngredients(r.ingredients, desired / r.servings);
 });
 
 
@@ -158,7 +232,6 @@ const measurementUnits = [
   { value: 'kg', text: 'kg (kilograms)' },
   { value: 'oz', text: 'oz (ounces)' },
   { value: 'lb', text: 'lb (pounds)' },
-  { value: 'lbs', text: 'lbs (pounds)' },
   // Volume units
   { value: 'ml', text: 'ml (milliliters)' },
   { value: 'l', text: 'l (liters)' },
@@ -191,21 +264,41 @@ const measurementUnits = [
 function addIngredientField(ingredient = { name: '', amount: '', unit: '' }) {
   const div = document.createElement('div');
   div.className = 'input-group mb-2 ingredient-row';
-  
-  // Create the unit dropdown options
-  const unitOptions = measurementUnits.map(unit => 
-    `<option value="${unit.value}" ${unit.value === (ingredient.unit || '') ? 'selected' : ''}>${unit.text}</option>`
-  ).join('');
-  
-  div.innerHTML = `
-    <input type="text" class="form-control ingredient-name" placeholder="Name" value="${ingredient.name || ''}">
-    <input type="number" class="form-control ingredient-amount" placeholder="Amount" value="${ingredient.amount || ''}" min="0" step="any">
-    <select class="form-select ingredient-unit" style="max-width: 150px;">
-      ${unitOptions}
-    </select>
-    <button type="button" class="btn btn-outline-danger remove-ingredient-btn">&times;</button>
-  `;
-  div.querySelector('.remove-ingredient-btn').onclick = () => div.remove();
+
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.className = 'form-control ingredient-name';
+  nameInput.placeholder = 'Name';
+  // Assigned rather than interpolated into a value="" attribute: an ingredient
+  // named with a double quote used to break out and mangle the form.
+  nameInput.value = ingredient.name || '';
+
+  const amountInput = document.createElement('input');
+  amountInput.type = 'number';
+  amountInput.className = 'form-control ingredient-amount';
+  amountInput.placeholder = 'Amount';
+  amountInput.min = '0';
+  amountInput.step = 'any';
+  amountInput.value = ingredient.amount ?? '';
+
+  const unitSelect = document.createElement('select');
+  unitSelect.className = 'form-select ingredient-unit';
+  unitSelect.style.maxWidth = '150px';
+  measurementUnits.forEach(unit => {
+    const option = document.createElement('option');
+    option.value = unit.value;
+    option.textContent = unit.text;
+    unitSelect.appendChild(option);
+  });
+  unitSelect.value = ingredient.unit || '';
+
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.className = 'btn btn-outline-danger remove-ingredient-btn';
+  removeBtn.textContent = '×';
+  removeBtn.onclick = () => div.remove();
+
+  div.append(nameInput, amountInput, unitSelect, removeBtn);
   ingredientsFields.appendChild(div);
 }
 
@@ -217,7 +310,7 @@ addRecipeBtn.addEventListener("click", () => {
   servingsInput.value = "";
   ingredientsFields.innerHTML = "";
   addIngredientField();
-  recipeModal.show();
+  modal("recipeModal").show();
 });
 
 // Edit recipe button
@@ -230,19 +323,36 @@ editRecipeBtn.addEventListener("click", () => {
   ingredientsFields.innerHTML = "";
   r.ingredients.forEach(ing => addIngredientField(ing));
   if (r.ingredients.length === 0) addIngredientField();
-  recipeModal.show();
+  modal("recipeModal").show();
 });
 
 // Save recipe
 saveRecipeBtn.addEventListener("click", () => {
   const name = recipeNameInput.value.trim();
   const servings = parseFloat(servingsInput.value);
+
+  // Both of these used to save silently: a blank name became an unlabelled row
+  // in the dropdown, and a blank servings count became NaN, serialised to null,
+  // and scaled to Infinity.
+  if (!name) {
+    recipeNameInput.focus();
+    alert("Give the recipe a name.");
+    return;
+  }
+  if (!Number.isFinite(servings) || servings <= 0) {
+    servingsInput.focus();
+    alert("Set how many servings this recipe makes.");
+    return;
+  }
+
   const ingredientRows = ingredientsFields.querySelectorAll('.ingredient-row');
   const ingredients = Array.from(ingredientRows).map(row => {
     const name = row.querySelector('.ingredient-name').value.trim();
     const amount = parseFloat(row.querySelector('.ingredient-amount').value);
-    const unit = row.querySelector('.ingredient-unit').value; // This now gets value from select element
-    return { name, amount: isNaN(amount) ? 0 : amount, unit };
+    const unit = row.querySelector('.ingredient-unit').value;
+    // null, not 0: a blank amount means "to taste", and 0 would scale an
+    // ingredient to nothing.
+    return { name, amount: Number.isFinite(amount) ? amount : null, unit };
   }).filter(ing => ing.name);
 
   const recipe = { name, servings, ingredients };
@@ -254,7 +364,7 @@ saveRecipeBtn.addEventListener("click", () => {
   }
 
   saveRecipes();
-  recipeModal.hide();
+  modal("recipeModal").hide();
   
   // If we were editing an existing recipe, refresh the display
   if (currentRecipeIndex !== null) {
@@ -270,7 +380,7 @@ deleteRecipeBtn.addEventListener("click", () => {
 
   const r = recipes[currentRecipeIndex];
   deleteRecipeName.textContent = r.name;
-  deleteModal.show();
+  modal("deleteModal").show();
 });
 
 // Confirm delete
@@ -285,7 +395,7 @@ confirmDeleteBtn.addEventListener("click", () => {
   recipeSelect.value = "";
   // keep the current search filter; list already re-rendered in saveRecipes()
   recipeDisplay.classList.add("d-none");
-  deleteModal.hide();
+  modal("deleteModal").hide();
 });
 
 // Handle dropdown select

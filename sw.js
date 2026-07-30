@@ -9,7 +9,9 @@ const SHELL = [
   "/index.html",
   "/style.css",
   "/script.js",
-  "/manifest.json"
+  "/manifest.json",
+  "/vendor/bootstrap.min.css",
+  "/vendor/bootstrap.bundle.min.js"
 ];
 
 self.addEventListener("install", event => {
