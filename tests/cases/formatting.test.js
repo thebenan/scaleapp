@@ -120,9 +120,44 @@ check("theme-color meta follows the theme",
       document.querySelector('meta[name="theme-color"]').getAttribute("content") === "#212529",
       document.querySelector('meta[name="theme-color"]').getAttribute("content"));
 
+// With no stored choice the theme follows the system, which differs between
+// machines and CI runners. Stub matchMedia so this asserts our logic rather than
+// whatever the environment happens to prefer.
+const realMatchMedia = window.matchMedia;
+const stubScheme = dark => {
+  window.matchMedia = query => ({
+    matches: dark && query.includes("dark"),
+    media: query,
+    addEventListener() {}, removeEventListener() {}
+  });
+};
+
+localStorage.removeItem("theme");
+stubScheme(true);
+check("with no stored choice, a dark system gives a dark theme", activeTheme() === "dark",
+      activeTheme());
+stubScheme(false);
+check("with no stored choice, a light system gives a light theme", activeTheme() === "light",
+      activeTheme());
+
+// An explicit choice must win over the system setting, even a contradicting one.
+localStorage.setItem("theme", "dark");
+stubScheme(false);
+check("a stored choice overrides the system setting", activeTheme() === "dark", activeTheme());
+
+// Toggling from a known stored state, so the result does not depend on the host.
+applyTheme("dark");
 themeBtn.click();
-check("clicking toggles back to light",
-      document.documentElement.getAttribute("data-bs-theme") === "light");
+check("clicking toggles to light",
+      document.documentElement.getAttribute("data-bs-theme") === "light",
+      document.documentElement.getAttribute("data-bs-theme"));
 check("the choice is remembered", localStorage.getItem("theme") === "light",
       String(localStorage.getItem("theme")));
 check("activeTheme reports the stored choice", activeTheme() === "light", activeTheme());
+
+themeBtn.click();
+check("clicking again toggles back to dark",
+      document.documentElement.getAttribute("data-bs-theme") === "dark",
+      document.documentElement.getAttribute("data-bs-theme"));
+
+window.matchMedia = realMatchMedia;

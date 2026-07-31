@@ -17,6 +17,19 @@ fi
 
 echo "pre-push: running test suite..."
 if ./tests/run.sh; then
+  # The suite runs against the working tree, but a push sends commits. If those
+  # differ, a green run here says nothing about what CI will see — which is
+  # exactly how a fix that existed locally reached CI missing.
+  if ! git diff --quiet HEAD --; then
+    echo >&2
+    echo "pre-push: WARNING — these tracked files are modified but NOT committed:" >&2
+    git diff --name-only HEAD -- | sed 's/^/    /' >&2
+    echo >&2
+    echo "pre-push: the tests above ran on your working tree, not on the commits" >&2
+    echo "          being pushed. CI will run the commits. Commit them first if" >&2
+    echo "          they are part of this change." >&2
+    echo >&2
+  fi
   exit 0
 fi
 
