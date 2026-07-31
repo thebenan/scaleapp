@@ -54,6 +54,20 @@ body {
   .navbar-brand {
     font-size: 1rem;
   }
+
+  /* Every pixel reclaimed here is a pixel of the title that survives. How much
+     the row needs depends on the device's fonts — the same header that fits
+     comfortably on one machine truncates on another with wider metrics — so it
+     is worth being generous with the margin. .px-3 and .gap-2 are !important
+     utilities, hence the specificity and the !important to beat them. */
+  nav.navbar {
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
+  }
+
+  #headerActions {
+    gap: 0.25rem !important;
+  }
 }
 
 /* --- Recipe list ----------------------------------------------------------
@@ -63,6 +77,70 @@ body {
 #recipeList {
   max-height: 45vh;
   overflow-y: auto;
+  /* A capped list that gives no sign of being capped just looks like a short
+     list. Desktop gets a scrollbar for free; phones use overlay scrollbars that
+     stay invisible until you already know to scroll, which is too late. */
+  scrollbar-width: thin;
+}
+
+.recipe-list-pane {
+  position: relative;
+}
+
+/* Fades the last row out at the bottom edge, so the list visibly continues past
+   where it is cut. Toggled rather than permanent: once you have scrolled to the
+   end there is nothing more to advertise, and a fade over the final row would
+   just look like a rendering fault. */
+.recipe-list-pane::after,
+.recipe-list-pane::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2.25rem;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.recipe-list-pane::after {
+  bottom: 0;
+  background: linear-gradient(to bottom, transparent, var(--bs-body-bg) 85%);
+  border-radius: 0 0 var(--bs-border-radius) var(--bs-border-radius);
+}
+
+.recipe-list-pane::before {
+  top: 0;
+  background: linear-gradient(to top, transparent, var(--bs-body-bg) 85%);
+  border-radius: var(--bs-border-radius) var(--bs-border-radius) 0 0;
+  z-index: 1;
+}
+
+.recipe-list-pane.more-below::after,
+.recipe-list-pane.more-above::before {
+  opacity: 1;
+}
+
+/* The chevron is the unambiguous part: a gradient alone reads as decoration.
+   It needs the z-index because ::after is the pane's last child in paint order,
+   so the fade would otherwise be drawn straight over the top of it. */
+.scroll-hint {
+  position: absolute;
+  bottom: 0.15rem;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  text-align: center;
+  font-size: 0.75rem;
+  line-height: 1;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  color: var(--bs-secondary-color);
+}
+
+.recipe-list-pane.more-below .scroll-hint {
+  opacity: 1;
 }
 
 /* Brand colour. Bootstrap 5.3 drives its components from CSS variables, so the
@@ -131,9 +209,11 @@ body {
   #addRecipeBtn,
   #banner,
   #recipeList,
+  #recipeListPane,
   #listMeta,
   #emptyState,
   #publicPanel,
+  #publicHeading,
   #trashPanel,
   #publicBtn,
   #exportBtn,

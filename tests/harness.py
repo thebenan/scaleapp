@@ -32,10 +32,12 @@ RUNNER_HEAD = """
 const app = window.__app;
 const { store, sync, migrate, newId, SCHEMA_VERSION, buildExportPayload,
         activeStorageKey, showAuthError, hideAuthError, setPassphraseVisible,
-        settleSignedOutRecipes, askAdoption, signInErrorMessage,
+        settleSignedOutRecipes, askAdoption, askDiscard, signOutFlow, signInErrorMessage,
         showRecipe, showPublicRecipe, renderRecipeList, renderTrash, renderPublicList,
         renderAuthState, renderOwnershipControls, pullAndFlush,
+        setPublicOpen, renderPublicMeta, paintPublicList,
         clearSearch, notify, dismissBanner, modal, addIngredientField, clearRecipeError,
+        updateScrollHints,
         renderScaledIngredients, formatAmount, formatIngredient,
         applyTheme, activeTheme } = app;
 

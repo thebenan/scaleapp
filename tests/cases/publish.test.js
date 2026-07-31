@@ -48,10 +48,27 @@ const anonPrivate = await fetch("/api/recipes");
 check("private cookbook is not readable unauthenticated", anonPrivate.status === 401,
       String(anonPrivate.status));
 
+// --- the panel is part of the page, not behind a click ---
+check("the public panel is open on load", !publicPanel.classList.contains("d-none"),
+      publicPanel.className);
+check("its button offers to hide it", publicBtn.textContent === "Hide", publicBtn.textContent);
+publicBtn.click();
+check("clicking closes it", publicPanel.classList.contains("d-none"), publicPanel.className);
+check("and offers to show it again", publicBtn.textContent === "Show", publicBtn.textContent);
+check("the choice is remembered for the next load",
+      localStorage.getItem("public.open") === "0",
+      String(localStorage.getItem("public.open")));
+publicBtn.click();
+check("reopening works", !publicPanel.classList.contains("d-none"), publicPanel.className);
+check("and is remembered too", localStorage.getItem("public.open") === "1",
+      String(localStorage.getItem("public.open")));
+
 // --- viewing a public recipe is read-only ---
 await renderPublicList();
 check("public panel lists the entry", publicList.textContent.includes("My Cake"),
       publicList.textContent);
+check("a current list says nothing about staleness",
+      publicMeta.classList.contains("d-none"), publicMeta.className);
 const entry = anonBody.recipes.find(r => r.id === publicId);
 showPublicRecipe(entry);
 check("public recipe is displayed", recipeName.textContent === "My Cake");
@@ -97,6 +114,102 @@ check("unpublished recipe leaves the public list",
       JSON.stringify(afterUnpublish.recipes.map(r => r.id)));
 check("the private original survives unpublishing", !!store.find("mine-1"));
 
+// --- published recipes are readable with no connection ---
+// The service worker never caches /api/*, so without a copy on the device the
+// public list is simply gone offline — which is when a recipe is most wanted.
+//
+// Republished first: the unpublish above emptied the list, and a cache test that
+// leaned on a copy taken before it would be passing by accident.
+await sync.publish(store.find("mine-1"));
+await renderPublicList();
+// Read from the store rather than hardcoded: the refresh test above renamed this
+// recipe, and "My Cake" still matches "My Cake v2" as a substring, so a literal
+// would keep passing while pointing at nothing.
+const publishedName = store.find("mine-1").name;
+check("the list is populated again for the offline tests",
+      publicList.textContent.includes(publishedName),
+      publishedName + " :: " + publicList.textContent);
+
+const cached = JSON.parse(localStorage.getItem("public.cache"));
+check("a successful fetch leaves a copy on the device",
+      cached && Array.isArray(cached.recipes) && cached.recipes.length > 0,
+      String(localStorage.getItem("public.cache")));
+check("the copy is stamped with when it was taken",
+      Number.isFinite(cached.fetchedAt), String(cached?.fetchedAt));
+check("the copy carries the ingredients, so it can be scaled offline",
+      cached.recipes.every(r => Array.isArray(r.ingredients)),
+      JSON.stringify(cached.recipes.map(r => r.ingredients?.length)));
+
+const realFetch = window.fetch;
+window.fetch = () => Promise.reject(new TypeError("simulated network failure"));
+
+const offlineEntries = await sync.listPublic();
+check("the list still comes back with no connection", offlineEntries.length > 0,
+      JSON.stringify(offlineEntries.map(r => r.name)));
+check("it is marked as the saved copy", sync.publicStale === true);
+
+await renderPublicList();
+check("the panel renders it offline", publicList.textContent.includes(publishedName),
+      publicList.textContent);
+check("and says it is a saved copy rather than pretending it is current",
+      !publicMeta.classList.contains("d-none") && /saved copy/i.test(publicMeta.textContent),
+      publicMeta.textContent);
+
+// A public recipe read from the cache must scale like any other.
+// Matched on sourceId, which does not change when the recipe is renamed.
+const offlineEntry = offlineEntries.find(r => r.sourceId === "mine-1");
+showPublicRecipe(offlineEntry);
+desiredServings.value = "16";
+desiredServings.dispatchEvent(new Event("input"));
+check("an offline public recipe still scales",
+      ingredientsList.querySelector(".ingredient-text").textContent === "600 g flour",
+      ingredientsList.querySelector(".ingredient-text").textContent);
+
+// With no copy at all there is nothing to fall back to, and it must say so
+// rather than sit on "Loading…".
+localStorage.removeItem("public.cache");
+let noCache = null;
+try { await sync.listPublic(); } catch (err) { noCache = err; }
+check("with no saved copy the failure still surfaces", noCache !== null, String(noCache));
+
+window.fetch = realFetch;
+await renderPublicList();
+check("reconnecting drops the stale marker", sync.publicStale === false);
+check("and the notice goes with it", publicMeta.classList.contains("d-none"),
+      publicMeta.className);
+
+// --- identity-dependent chrome has to follow identity ---
+// The panel is painted at load, before whoami has answered, so the first paint
+// carries nobody's Remove button. They have to arrive when identity does and go
+// when it goes — a Remove button left behind after signing out offers an action
+// the server will refuse.
+const removeButtons = () => publicList.querySelectorAll(".public-remove").length;
+check("the publisher sees a Remove button", removeButtons() > 0, String(removeButtons()));
+
+// Through the real sign-out path, not by poking the renderer: the bug this
+// guards against is the redraw not being wired to identity changes at all.
+let fetchCount = 0;
+const countingFetch = window.fetch;
+window.fetch = (...args) => { fetchCount++; return countingFetch(...args); };
+await signOutFlow();
+window.fetch = countingFetch;
+
+check("signing out takes it away", removeButtons() === 0, String(removeButtons()));
+check("the entry itself is still listed", publicList.textContent.includes(publishedName),
+      publicList.textContent);
+check("and the list was not refetched to manage it", fetchCount === 0, String(fetchCount));
+
+// Also through the real path: sync.signIn is only the network call, and it is
+// the handler around it that redraws.
+passphraseInput.value = "test-passphrase";
+signInBtn.click();
+check("signing back in brings it back", await waitFor(() => removeButtons() > 0),
+      String(removeButtons()));
+
+// Leave the public list as the permissions block below expects to find it.
+await sync.pull();
+await sync.unpublish(store.find("mine-1"));
+
 // --- permissions ---
 // "other" publishes something of their own.
 sync.signOut();
@@ -111,9 +224,11 @@ store.save();
 const theirPublicId = await sync.publish(theirs);
 check("non-admin can publish their own recipe", typeof theirPublicId === "string");
 
-// tester published nothing now, so make one to attack.
+// tester published nothing now, so make one to attack. Signing out took tester's
+// recipes off the device, so they have to come back from the server first.
 sync.signOut();
 await sync.signIn("test-passphrase");
+await sync.pull();
 const adminPublicId = await sync.publish(store.find("mine-1"));
 
 sync.signOut();

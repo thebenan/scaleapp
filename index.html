@@ -55,7 +55,13 @@
            current search is hiding. -->
       <small id="listMeta" class="text-muted d-block mb-1"></small>
 
-      <div id="recipeList" class="list-group"></div>
+      <!-- The pane exists to hold the "there is more below" fade, which cannot
+           live on the scrolling element itself: it would scroll away with the
+           content it is advertising. -->
+      <div id="recipeListPane" class="recipe-list-pane">
+        <div id="recipeList" class="list-group"></div>
+        <div class="scroll-hint" aria-hidden="true">⌄</div>
+      </div>
 
       <div id="emptyState" class="text-center text-muted py-5 d-none">
         <p class="fs-1 mb-2" aria-hidden="true">🍳</p>
@@ -97,14 +103,22 @@
       </div>
     </div>
 
-    <!-- Public recipes. Readable without signing in. -->
+    <!-- Public recipes. Readable without signing in, and shown straight away
+         rather than behind a click — they are part of the page, not a feature
+         you have to go looking for. Collapsible, and the choice is remembered. -->
     <div class="mt-4">
-      <button id="publicBtn" class="btn btn-outline-primary btn-sm">🌍 Public recipes</button>
-    </div>
-    <div id="publicPanel" class="card mt-2 d-none">
-      <div class="card-body">
-        <h6 class="card-title">Published by everyone</h6>
-        <div id="publicList" class="list-group"></div>
+      <div id="publicHeading" class="d-flex justify-content-between align-items-center mb-2">
+        <h6 class="mb-0">🌍 Public recipes</h6>
+        <button id="publicBtn" class="btn btn-outline-secondary btn-sm"
+                aria-controls="publicPanel" aria-expanded="true">Hide</button>
+      </div>
+      <div id="publicPanel" class="card">
+        <div class="card-body">
+          <!-- Says when the list was last fetched, but only when that is not
+               now: silently serving a week-old list is worse than saying so. -->
+          <small id="publicMeta" class="text-muted d-block mb-2 d-none"></small>
+          <div id="publicList" class="list-group"></div>
+        </div>
       </div>
     </div>
 
@@ -213,6 +227,33 @@
         <div class="modal-footer">
           <button id="adoptKeepBtn" class="btn btn-secondary">Keep separate</button>
           <button id="adoptAddBtn" class="btn btn-primary">Add to my cookbook</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: signing out forgets this account's copy on this device, so
+       anything that never reached the server would go with it -->
+  <div class="modal fade" id="signOutModal" tabindex="-1" data-bs-backdrop="static">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Changes not yet sent</h5>
+        </div>
+        <div class="modal-body">
+          <p>
+            <strong id="strandedCount"></strong>
+            <span id="strandedNoun">changes</span> could not be sent to the server.
+          </p>
+          <p class="text-muted small mb-0">
+            Signing out takes this account's recipes off this device, so those
+            changes would be lost for good. Staying signed in keeps them here and
+            sends them as soon as there is a connection.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button id="strandedStayBtn" class="btn btn-secondary">Stay signed in</button>
+          <button id="strandedDiscardBtn" class="btn btn-danger">Sign out and discard</button>
         </div>
       </div>
     </div>

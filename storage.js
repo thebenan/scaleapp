@@ -64,6 +64,13 @@ export function onStoreChange(fn) {
   listeners.push(fn);
 }
 
+// Every path that replaces what the store holds has to go through here. Saving
+// announced itself but switching namespace did not, so signing out swapped the
+// recipes underneath a view that carried on displaying the old count.
+function notifyChange() {
+  listeners.forEach(fn => fn());
+}
+
 export const store = {
   // Holds tombstones too; everything user-facing goes through live().
   recipes: [],
@@ -75,7 +82,21 @@ export const store = {
   // other than whoever is signed in.
   useNamespace(person) {
     activeKey = namespaceKeyFor(person);
-    return this.load();
+    const loaded = this.load();
+    notifyChange();
+    return loaded;
+  },
+
+  // Removes a person's cookbook from this device. Signing out should not leave
+  // an account's recipes sitting in a browser that account has left — they live
+  // on the server and come back at the next sign-in. Never touches the
+  // signed-out set, which belongs to the device rather than to anyone.
+  forget(person) {
+    if (!person) return false;
+    const key = namespaceKeyFor(person);
+    if (localStorage.getItem(key) === null) return false;
+    localStorage.removeItem(key);
+    return true;
   },
 
   // Whether this person has ever had a cookbook on this browser. Used to decide
@@ -98,20 +119,23 @@ export const store = {
   // rather than copied, so the next person to sign in cannot inherit them too.
   // Never called without asking first — it is not obvious that signing in should
   // hand your recipes to an account, and it is awkward to undo.
+  //
+  // Returns the ids as well as the count: the caller has to queue them for
+  // upload, or they would exist on this device and nowhere else.
   adoptSignedOut(person) {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw === null) return 0;
+    if (raw === null) return { added: 0, ids: [] };
     let incoming;
     try {
       incoming = migrate(JSON.parse(raw));
     } catch {
-      return 0;
+      return { added: 0, ids: [] };
     }
     this.useNamespace(person);
     const { added } = this.merge(incoming);
     this.save();
     localStorage.removeItem(STORAGE_KEY);
-    return added;
+    return { added, ids: incoming.map(r => r.id) };
   },
 
   load() {

@@ -125,6 +125,53 @@ check("thirty more recipes did not lengthen the page much",
 check("the count reflects the whole collection", /33 recipes/.test(listMeta.textContent),
       listMeta.textContent);
 
+// A capped list that gives no sign of being capped just looks like a short list.
+// Scrolled to the top first: rendering keeps the open recipe in view, which can
+// leave the pane part-way down.
+recipeList.scrollTop = 0;
+updateScrollHints();
+const hintEl = document.querySelector(".scroll-hint");
+// The chevron fades in and out. Headless Chrome produces no animation frames, so
+// a transitioning opacity sits at its start value forever and says nothing about
+// where it was heading. Drop the transition and assert the end state directly.
+hintEl.style.transition = "none";
+const hintOpacity = () => parseFloat(getComputedStyle(hintEl).opacity);
+
+check("a list with more below says so",
+      recipeListPane.classList.contains("more-below"), recipeListPane.className);
+check("nothing above it at the top",
+      !recipeListPane.classList.contains("more-above"), recipeListPane.className);
+// The gradient alone reads as decoration, so the chevron is the part that has to
+// actually be on screen — and it sits under the fade without a z-index.
+check("the chevron is visible", hintOpacity() === 1, String(hintOpacity()));
+check("and is painted above the fade",
+      parseInt(getComputedStyle(hintEl).zIndex, 10) > 0,
+      getComputedStyle(hintEl).zIndex);
+
+recipeList.scrollTop = recipeList.scrollHeight;
+updateScrollHints();
+check("at the end, it stops claiming there is more below",
+      !recipeListPane.classList.contains("more-below"), recipeListPane.className);
+check("and the chevron goes with it", hintOpacity() === 0, String(hintOpacity()));
+check("and points back up instead",
+      recipeListPane.classList.contains("more-above"), recipeListPane.className);
+
+recipeList.scrollTop = 0;
+updateScrollHints();
+check("scrolling back restores the hint",
+      recipeListPane.classList.contains("more-below")
+        && !recipeListPane.classList.contains("more-above"),
+      recipeListPane.className);
+
+// A list that fits must not advertise scrolling it does not have.
+searchInput.value = "Filler 00";
+searchInput.dispatchEvent(new Event("input"));
+check("a short list shows no scroll hint at all",
+      !recipeListPane.classList.contains("more-below")
+        && !recipeListPane.classList.contains("more-above"),
+      recipeListPane.className);
+clearSearch();
+
 searchInput.value = "Filler 0";
 searchInput.dispatchEvent(new Event("input"));
 check("the count reports the filtered subset", listMeta.textContent === "10 of 33 recipes",
@@ -137,6 +184,11 @@ clearSearch();
 // navbar is squeezed directly — on the navbar rather than on <body>, because
 // Bootstrap leaves a scrollbar-compensating padding on <body> after a modal and
 // that would silently eat 15px of the width under test.
+//
+// Everything below is a property of the layout rules, never of the font. Text
+// measures differently on this machine and on CI — a check that some particular
+// string fits in some particular width passes on whichever of the two it was
+// written on and fails on the other.
 const brandEl = document.querySelector(".navbar-brand");
 const navbar = document.querySelector(".navbar");
 const onOneRow = () => headerActions.offsetTop < brandEl.offsetTop + brandEl.offsetHeight;
@@ -144,32 +196,63 @@ const geometry = () => "brand " + brandEl.offsetTop + "+" + brandEl.offsetHeight
       + " vs actions " + headerActions.offsetTop
       + ", nav " + navbar.scrollWidth + "/" + navbar.clientWidth;
 
-authBtn.textContent = "Sign out (benan)";
-// Media queries key off the viewport, which stays at the headless default, so
-// the two things the <576px rules change are applied by hand: the smaller brand
-// and the hidden sync wording.
-syncLabel.textContent = "";
-brandEl.style.fontSize = "1rem";
-navbar.style.width = "360px";
-check("a signed-in header fits on one row at phone width", onOneRow(), geometry());
-check("nothing has to be truncated in the ordinary case",
-      authBtn.scrollWidth <= authBtn.clientWidth + 1 && brandEl.scrollWidth <= brandEl.clientWidth + 1,
-      "auth " + authBtn.scrollWidth + "/" + authBtn.clientWidth
-        + ", brand " + brandEl.scrollWidth + "/" + brandEl.clientWidth);
-
-// A long name on a narrow phone must truncate the title, never wrap the row and
-// never push the bar wider than the screen.
+// The longest plausible contents. The sync wording is blanked because the media
+// query hides it at the width being simulated, and it cannot be applied here:
+// media queries key off the viewport, which stays at the headless default.
 authBtn.textContent = "Sign out (christopher)";
-navbar.style.width = "320px";
-check("a long name still does not wrap the header", onOneRow(), geometry());
-check("and does not overflow it sideways",
+syncLabel.textContent = "";
+
+// Natural widths, measured with room to spare, to compare the squeeze against.
+navbar.style.width = "1000px";
+const naturalBrand = brandEl.clientWidth;
+const naturalAuth = authBtn.clientWidth;
+const navPad = parseFloat(getComputedStyle(navbar).paddingLeft)
+             + parseFloat(getComputedStyle(navbar).paddingRight);
+const natural = naturalBrand + headerActions.clientWidth + navPad;
+// How much the title can surrender before it hits the floor that keeps the 🍳.
+const floor = parseFloat(getComputedStyle(brandEl).minWidth);
+const slack = naturalBrand - floor;
+
+// The squeeze is a fraction of that slack rather than a pixel count, so the test
+// lands in the same regime whatever the text happens to measure.
+const squeezeTo = deficit => { navbar.style.width = (natural - deficit) + "px"; };
+
+// --- squeezed, but not past what the title can absorb ---
+squeezeTo(slack * 0.5);
+const lostByBrand = naturalBrand - brandEl.clientWidth;
+const lostByAuth = naturalAuth - authBtn.clientWidth;
+
+check("a long name does not wrap the header", onOneRow(), geometry());
+check("and does not push the bar wider than the screen",
       navbar.scrollWidth <= navbar.clientWidth + 1, geometry());
-check("the title is what gave up the space",
-      brandEl.scrollWidth > brandEl.clientWidth,
-      brandEl.scrollWidth + " vs " + brandEl.clientWidth);
-check("the 🍳 survives the squeeze", brandEl.clientWidth >= 16,
-      String(brandEl.clientWidth));
+check("the title gives up width under pressure", lostByBrand > 0,
+      naturalBrand + " -> " + brandEl.clientWidth);
+// The 100:1 shrink ratio, restated as the thing it is there to guarantee: the
+// account you are signed into stays readable, whatever it costs the title.
+check("the title gives up far more of it than the controls do",
+      lostByBrand > 10 * lostByAuth,
+      "brand -" + lostByBrand + " vs auth -" + lostByAuth);
+check("the 🍳 survives the squeeze", brandEl.clientWidth > floor,
+      brandEl.clientWidth + " vs floor " + floor);
+
+// --- squeezed past it, where the controls have to give as well ---
+// Degrading here means truncating the button. It must not mean wrapping the row
+// or pushing the bar off the side of the screen.
+squeezeTo(slack * 1.5);
+check("an exhausted title still does not wrap the header", onOneRow(), geometry());
+check("nor overflow it", navbar.scrollWidth <= navbar.clientWidth + 1, geometry());
+check("the title stops shrinking at its floor",
+      Math.abs(brandEl.clientWidth - floor) <= 1,
+      brandEl.clientWidth + " vs floor " + floor);
+// Asserted against a measured length rather than against `floor`, which comes
+// from the same stylesheet under test and would happily agree that a floor of
+// zero had been respected.
+check("and that floor is wide enough to keep the 🍳",
+      brandEl.clientWidth >= parseFloat(getComputedStyle(document.documentElement).fontSize),
+      brandEl.clientWidth + "px of brand left");
+check("only then do the controls start truncating",
+      authBtn.clientWidth < naturalAuth,
+      naturalAuth + " -> " + authBtn.clientWidth);
 
 navbar.style.width = "";
-brandEl.style.fontSize = "";
 renderAuthState();

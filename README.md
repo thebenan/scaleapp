@@ -8,9 +8,19 @@ Sign in with a passphrase to get your own cookbook, synced across your devices
 and usable offline. You can publish a copy of a recipe so anyone can read it
 without signing in.
 
+Published recipes are listed on the page without signing in, and a copy is kept
+on the device so they can be read and scaled offline too. That copy is refreshed
+whenever the app loads with a connection, which means unpublishing is not
+retroactive: a device that has been offline since keeps showing what it last saw.
+
 Each person's recipes are stored under their own key, so two people can share a
 browser without seeing each other's cookbooks. Recipes saved before signing in
 stay separate unless you choose to add them to an account.
+
+Signing out removes that account's recipes from the device — they live on the
+server and come back at the next sign-in, which does mean signing back in needs a
+connection. If anything is still waiting to upload, signing out asks first rather
+than discarding it, since an unsent change exists nowhere else.
 
 ## Run it locally
 

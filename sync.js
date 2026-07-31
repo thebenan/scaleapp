@@ -20,6 +20,31 @@ function outboxKey() {
   return person ? `${OUTBOX_KEY}.${person}` : OUTBOX_KEY;
 }
 
+// The published list, kept on the device so it can be read and scaled with no
+// connection. Not namespaced and not cleared on sign-out: it is public by
+// definition, and belongs to the device rather than to whoever is signed in.
+const PUBLIC_CACHE_KEY = "public.cache";
+
+function readPublicCache() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PUBLIC_CACHE_KEY));
+    return raw && Array.isArray(raw.recipes) ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+function writePublicCache(recipes) {
+  try {
+    localStorage.setItem(PUBLIC_CACHE_KEY,
+      JSON.stringify({ fetchedAt: Date.now(), recipes }));
+  } catch {
+    // Out of quota. The list still works right now; only the offline copy is
+    // lost, which is not worth failing the request over — and recipes matter
+    // more than this cache does.
+  }
+}
+
 function readOutbox() {
   try {
     const raw = JSON.parse(localStorage.getItem(outboxKey()));
@@ -39,6 +64,10 @@ export const sync = {
   // Set when the last network attempt failed, so the UI can say "not synced"
   // without guessing.
   offline: false,
+  // Same idea for the published list: what the last listPublic() actually
+  // returned, so the panel can say whether it is showing today's copy.
+  publicStale: false,
+  publicFetchedAt: null,
 
   passphrase() {
     return localStorage.getItem(AUTH_KEY);
@@ -107,13 +136,25 @@ export const sync = {
     }
   },
 
-  signOut() {
+  // Signing out takes this account's recipes off the device: they belong on the
+  // server, and leaving them in a browser the account has walked away from is
+  // both confusing and someone else's data sitting on your disk.
+  //
+  // forget: false keeps the local copy, for the one case where dropping it would
+  // destroy work — changes that never reached the server. The caller decides,
+  // because only it can ask.
+  signOut({ forget = true } = {}) {
+    const person = this.person;
     localStorage.removeItem(AUTH_KEY);
     localStorage.removeItem(PERSON_KEY);
     this.person = null;
     this.admin = false;
-    // The outbox is deliberately kept: it is namespaced per person, so unsent
-    // changes are still waiting when they sign back in.
+    if (forget && person) {
+      store.forget(person);
+      // The outbox goes with it. Kept, it would name recipes this device no
+      // longer has, and the next sign-in would try to upload nothing.
+      localStorage.removeItem(`${OUTBOX_KEY}.${person}`);
+    }
     store.useNamespace(null);
   },
 
@@ -209,9 +250,27 @@ export const sync = {
 
   // --- publishing ---
 
+  // Falls back to the device's copy when the network is gone, so published
+  // recipes are readable and scalable offline like your own are.
+  //
+  // The cost is that unpublishing stops being immediate: a device that has not
+  // been online since keeps showing the copy it has. Nothing new is exposed —
+  // it was already world-readable — but Remove no longer clears every screen.
   async listPublic() {
-    const { body } = await this.request("GET", "public");
-    return body.recipes || [];
+    try {
+      const { body } = await this.request("GET", "public");
+      const recipes = body.recipes || [];
+      writePublicCache(recipes);
+      this.publicStale = false;
+      this.publicFetchedAt = Date.now();
+      return recipes;
+    } catch (err) {
+      const cached = readPublicCache();
+      if (!cached) throw err;
+      this.publicStale = true;
+      this.publicFetchedAt = cached.fetchedAt;
+      return cached.recipes;
+    }
   },
 
   // Copies rather than moves: the private original keeps its own id and stays

@@ -27,24 +27,35 @@ adoptAddBtn.click();
 await __adoption;
 
 
-// --- first sync must upload, never wipe ---
-// A recipe missing from the server means "not uploaded yet". If that were read as
+// Adoption queues what it adopts, so wait for that to land rather than racing it.
+check("adopted recipes are uploaded, not left on the device only",
+      await waitFor(() => sync.pending().length === 0), JSON.stringify(sync.pending()));
+
+// --- a recipe the server has never seen must upload, never wipe ---
+// Missing from the server means "not uploaded yet". If that were read as
 // "deleted", everyone's existing recipes would vanish the moment they signed in.
+// Made here without going through queueSync, the way an offline edit arrives.
+const localOnly = store.create({
+  name: "Never Uploaded", servings: 2,
+  ingredients: [{ id: "lo-1", name: "salt", amount: 5, unit: "g" }]
+});
+store.save();
 const localCount = store.live().length;
-check("seed has local recipes", localCount === 2, String(localCount));
+check("three local recipes, one of them unknown to the server", localCount === 3,
+      String(localCount));
 
 await sync.pull();
 check("first pull keeps local recipes", store.live().length === localCount,
       String(store.live().length));
-check("first pull queues local recipes for upload", sync.pending().length === localCount,
-      JSON.stringify(sync.pending()));
+check("pull queues the server-unknown recipe for upload",
+      sync.pending().includes(localOnly.id), JSON.stringify(sync.pending()));
 
 const flushed = await sync.flush();
-check("first flush uploads them", flushed.pushed === localCount, JSON.stringify(flushed));
+check("flush uploads it", flushed.pushed === 1, JSON.stringify(flushed));
 check("outbox drains", sync.pending().length === 0, JSON.stringify(sync.pending()));
 
 const onServer = await (await fetch("/api/recipes", { headers: auth })).json();
-check("server now holds both recipes", onServer.recipes.length === 2,
+check("server now holds all three recipes", onServer.recipes.length === 3,
       String(onServer.recipes.length));
 check("server stamps the owner", onServer.recipes.every(r => r.owner === "tester"));
 
@@ -135,13 +146,19 @@ check("a rejected passphrase is not kept",
       localStorage.getItem("auth.passphrase") === null,
       String(localStorage.getItem("auth.passphrase")));
 
-// Signing out switches to the signed-out cookbook; it must not destroy anything.
+// Signing out switches to the signed-out cookbook and takes the account's copy
+// off the device with it. The server is what makes that safe.
 check("signed-out view is separate and empty", store.live().length === 0,
       String(store.live().length));
-check("the recipes are still on disk under the person's own key",
-      JSON.parse(localStorage.getItem("recipes.tester")).recipes.length >= 2,
+check("the account's cookbook is no longer on disk",
+      localStorage.getItem("recipes.tester") === null,
       String(localStorage.getItem("recipes.tester")));
 
 await sync.signIn(PASS);
-check("recipes come back on signing in again", store.live().length >= 2,
+check("signing in again starts from nothing on the device", store.live().length === 0,
       String(store.live().length));
+await sync.pull();
+check("the recipes come back from the server", store.live().length >= 2,
+      String(store.live().length));
+check("including the one that was only ever local before", !!store.find(localOnly.id),
+      JSON.stringify(store.live().map(r => r.name)));

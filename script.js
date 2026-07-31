@@ -9,6 +9,7 @@ import { formatAmount, formatIngredient } from "./format.js";
 const searchInput = document.getElementById("searchInput");
 const clearSearchBtn = document.getElementById("clearSearchBtn");
 const recipeList = document.getElementById("recipeList");
+const recipeListPane = document.getElementById("recipeListPane");
 const listMeta = document.getElementById("listMeta");
 const emptyState = document.getElementById("emptyState");
 const emptyStateTitle = document.getElementById("emptyStateTitle");
@@ -69,6 +70,7 @@ const adoptKeepBtn = document.getElementById("adoptKeepBtn");
 const publicBtn = document.getElementById("publicBtn");
 const publicPanel = document.getElementById("publicPanel");
 const publicList = document.getElementById("publicList");
+const publicMeta = document.getElementById("publicMeta");
 
 // Built on first use, not at parse time. Constructing these eagerly meant a
 // missing Bootstrap threw here and aborted the rest of the file, so the recipe
@@ -186,6 +188,7 @@ function renderRecipeList() {
   if (active && recipeList.scrollHeight > recipeList.clientHeight) {
     active.scrollIntoView({ block: "nearest" });
   }
+  updateScrollHints();
 
   // Distinguish "you have nothing" from "nothing matched", because the useful
   // next action is different in each case.
@@ -202,6 +205,24 @@ function renderRecipeList() {
       : "Tap the + button to add your first one.";
   }
 }
+
+// Whether the list has more above or below what is currently showing. Driven off
+// real scroll geometry rather than a recipe count, so it is right at any pane
+// height and however long the names are.
+function updateScrollHints() {
+  // A pixel of slack: fractional scroll positions never land exactly on the end,
+  // which would leave the "more below" hint up at the bottom of the list.
+  const slack = 1;
+  const scrollable = recipeList.scrollHeight - recipeList.clientHeight > slack;
+  const atBottom = recipeList.scrollTop + recipeList.clientHeight
+                   >= recipeList.scrollHeight - slack;
+  recipeListPane.classList.toggle("more-below", scrollable && !atBottom);
+  recipeListPane.classList.toggle("more-above", scrollable && recipeList.scrollTop > slack);
+}
+
+recipeList.addEventListener("scroll", updateScrollHints);
+// The pane is sized in vh, so a rotation or a resize changes what fits.
+window.addEventListener("resize", updateScrollHints);
 
 // Storage never calls rendering directly; it announces changes and the view
 // reacts. That seam is what lets the sync layer mutate recipes safely.
@@ -723,6 +744,10 @@ function renderAuthState() {
   syncStatus.setAttribute("aria-label", label);
 
   renderOwnershipControls();
+  // Whether a public entry gets a Remove button depends on who you are, and the
+  // panel is painted at load — before whoami has answered. Redrawing here means
+  // every identity change carries it, rather than each caller remembering to.
+  paintPublicList();
 }
 
 function showAuthError(message) {
@@ -748,12 +773,54 @@ togglePassphrase.addEventListener("click", () => {
   passphraseInput.focus();
 });
 
+// Signing out drops this account's local copy, so anything still in the outbox
+// would be destroyed. Send it first, and only ask if something is left over.
+async function signOutFlow() {
+  if (sync.pending().length > 0 && navigator.onLine) {
+    notify("Sending your last changes before signing out…", "info");
+    try { await sync.flush(); } catch { /* the count below is the real check */ }
+  }
+
+  const stranded = sync.pending().length;
+  if (stranded > 0 && !(await askDiscard(stranded))) {
+    notify("Still signed in. Your unsent changes will go as soon as there is a connection.",
+           "info");
+    return;
+  }
+
+  const person = sync.person;
+  sync.signOut();
+  renderAuthState();
+  showRecipe(null);
+  notify(stranded > 0
+    ? `Signed out, and ${stranded} unsent change${stranded === 1 ? "" : "s"} discarded.`
+    : `Signed out. ${person}'s recipes are on the server, not on this device — `
+      + "they come back when you sign in.", "info");
+}
+
+function askDiscard(count) {
+  return new Promise(resolve => {
+    strandedCount.textContent = String(count);
+    strandedNoun.textContent = count === 1 ? "change" : "changes";
+
+    const finish = choice => {
+      strandedDiscardBtn.removeEventListener("click", onDiscard);
+      strandedStayBtn.removeEventListener("click", onStay);
+      modal("signOutModal").hide();
+      resolve(choice);
+    };
+    const onDiscard = () => finish(true);
+    const onStay = () => finish(false);
+
+    strandedDiscardBtn.addEventListener("click", onDiscard);
+    strandedStayBtn.addEventListener("click", onStay);
+    modal("signOutModal").show();
+  });
+}
+
 authBtn.addEventListener("click", async () => {
   if (sync.signedIn()) {
-    sync.signOut();
-    renderAuthState();
-    showRecipe(null);
-    notify("Signed out. Your recipes are waiting when you sign back in.", "info");
+    await signOutFlow();
     return;
   }
   passphraseInput.value = "";
@@ -823,7 +890,11 @@ async function settleSignedOutRecipes() {
   }
 
   if (await askAdoption(count, sync.person)) {
-    const added = store.adoptSignedOut(sync.person);
+    const { added, ids } = store.adoptSignedOut(sync.person);
+    // Adopted recipes came from this device, so the server has never seen them.
+    // Without this they would exist here and nowhere else — and signing out now
+    // forgets this device's copy.
+    ids.forEach(queueSync);
     notify(`Added ${added} recipe${added === 1 ? "" : "s"} to ${sync.person}'s cookbook.`,
            "success");
   } else {
@@ -901,6 +972,9 @@ async function doPublish(recipe, successMessage) {
   try {
     await sync.publish(recipe);
     notify(successMessage, "success");
+    // The panel is on screen now, so it would otherwise sit there missing the
+    // recipe that was just published to it.
+    await renderPublicList();
   } catch (err) {
     notify(`Could not publish: ${err.message}`, "error");
   }
@@ -921,12 +995,28 @@ unpublishBtn.addEventListener("click", async () => {
   try {
     await sync.unpublish(r);
     notify(`"${r.name}" is no longer public.`, "success");
+    await renderPublicList();
   } catch (err) {
     notify(`Could not unpublish: ${err.message}`, "error");
   }
   renderOwnershipControls();
   renderAuthState();
 });
+
+// Only shown when the list is not current, so a fresh panel stays quiet.
+function renderPublicMeta() {
+  const stale = sync.publicStale && sync.publicFetchedAt;
+  publicMeta.classList.toggle("d-none", !stale);
+  if (!stale) return;
+  publicMeta.textContent =
+    `Saved copy from ${new Date(sync.publicFetchedAt).toLocaleString()} — `
+    + "this device can't reach the server, so newly published recipes are missing.";
+}
+
+// The last entries fetched, kept so the list can be redrawn without asking the
+// server again. Whether a Remove button belongs on a row depends on who you are,
+// and the panel is drawn at load — before the whoami round trip has said.
+let publicEntries = [];
 
 async function renderPublicList() {
   publicList.innerHTML = "";
@@ -935,19 +1025,32 @@ async function renderPublicList() {
   loading.textContent = "Loading…";
   publicList.appendChild(loading);
 
-  let entries;
   try {
-    entries = await sync.listPublic();
+    publicEntries = await sync.listPublic();
   } catch {
+    publicEntries = [];
     publicList.innerHTML = "";
+    renderPublicMeta();
     const failed = document.createElement("div");
     failed.className = "list-group-item text-muted";
-    failed.textContent = "Could not load public recipes.";
+    // Distinguish "no connection and nothing saved here yet" from a server
+    // problem: only the first one is fixed by going somewhere with signal.
+    failed.textContent = navigator.onLine
+      ? "Could not load public recipes."
+      : "You're offline, and no public recipes have been saved on this device yet.";
     publicList.appendChild(failed);
     return;
   }
 
+  paintPublicList();
+}
+
+// Redraws from what was last fetched. Called again once identity is known, so
+// the publisher's own Remove buttons appear without a second request.
+function paintPublicList() {
+  const entries = publicEntries;
   publicList.innerHTML = "";
+  renderPublicMeta();
   if (entries.length === 0) {
     const empty = document.createElement("div");
     empty.className = "list-group-item text-muted";
@@ -960,8 +1063,12 @@ async function renderPublicList() {
     const row = document.createElement("div");
     row.className = "list-group-item d-flex justify-content-between align-items-center gap-2";
 
+    // Styled as plain text rather than a link: it sits directly under the
+    // private list, where the rows are plain, and a column of blue underlines
+    // read as a different kind of thing entirely.
     const open = document.createElement("button");
-    open.className = "btn btn-link p-0 text-start flex-grow-1 public-open";
+    open.className = "btn btn-link p-0 text-start flex-grow-1 public-open "
+                   + "text-decoration-none text-body";
     open.textContent = `${entry.name} · by ${entry.publishedBy}`;
     open.onclick = () => showPublicRecipe(entry);
     row.appendChild(open);
@@ -988,9 +1095,19 @@ async function renderPublicList() {
   });
 }
 
+// Open by default, because a list nobody clicks is a list nobody reads. The
+// choice is remembered so closing it stays closed.
+const PUBLIC_OPEN_KEY = "public.open";
+
+function setPublicOpen(open) {
+  publicPanel.classList.toggle("d-none", !open);
+  publicBtn.textContent = open ? "Hide" : "Show";
+  publicBtn.setAttribute("aria-expanded", String(open));
+  localStorage.setItem(PUBLIC_OPEN_KEY, open ? "1" : "0");
+}
+
 publicBtn.addEventListener("click", () => {
-  publicPanel.classList.toggle("d-none");
-  if (!publicPanel.classList.contains("d-none")) renderPublicList();
+  setPublicOpen(publicPanel.classList.contains("d-none"));
 });
 
 // Retry the outbox as soon as connectivity returns.
@@ -1047,6 +1164,13 @@ renderRecipeList();
 renderBuildStamp();
 renderAuthState();
 
+setPublicOpen(localStorage.getItem(PUBLIC_OPEN_KEY) !== "0");
+// Fetched whether or not the panel is showing: the point of the device copy is
+// to be there when the connection is not, and a list only fetched on demand is
+// missing in exactly the case it is wanted. One request, and the endpoint's CDN
+// headers absorb most of them before they reach the function.
+renderPublicList();
+
 // Resume a previous session without prompting, then reconcile in the background.
 // Nothing here blocks first paint.
 sync.resume().then(async ok => {
@@ -1063,10 +1187,12 @@ sync.resume().then(async ok => {
 window.__app = {
   store, sync, migrate, newId, SCHEMA_VERSION, buildExportPayload,
   activeStorageKey, showAuthError, hideAuthError, setPassphraseVisible,
-  settleSignedOutRecipes, askAdoption, signInErrorMessage,
+  settleSignedOutRecipes, askAdoption, askDiscard, signOutFlow, signInErrorMessage,
   showRecipe, showPublicRecipe, renderRecipeList, renderTrash, renderPublicList,
   renderAuthState, renderOwnershipControls, pullAndFlush,
+  setPublicOpen, renderPublicMeta, paintPublicList,
   clearSearch, notify, dismissBanner, modal, addIngredientField, clearRecipeError,
+  updateScrollHints,
   renderScaledIngredients, formatAmount, formatIngredient, applyTheme, activeTheme,
   get currentRecipeId() { return currentRecipeId; },
   get currentPublic() { return currentPublic; }
