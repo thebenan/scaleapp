@@ -9,6 +9,7 @@ import { formatAmount, formatIngredient } from "./format.js";
 const searchInput = document.getElementById("searchInput");
 const clearSearchBtn = document.getElementById("clearSearchBtn");
 const recipeList = document.getElementById("recipeList");
+const listMeta = document.getElementById("listMeta");
 const emptyState = document.getElementById("emptyState");
 const emptyStateTitle = document.getElementById("emptyStateTitle");
 const emptyStateHint = document.getElementById("emptyStateHint");
@@ -27,6 +28,7 @@ const deleteRecipeBtn = document.getElementById("deleteRecipeBtn");
 const addRecipeBtn = document.getElementById("addRecipeBtn");
 
 const modalTitle = document.getElementById("modalTitle");
+const recipeError = document.getElementById("recipeError");
 const recipeNameInput = document.getElementById("recipeNameInput");
 const servingsInput = document.getElementById("servingsInput");
 const ingredientsFields = document.getElementById("ingredientsFields");
@@ -48,6 +50,8 @@ const buildStamp = document.getElementById("buildStamp");
 
 const authBtn = document.getElementById("authBtn");
 const syncStatus = document.getElementById("syncStatus");
+const syncGlyph = document.getElementById("syncGlyph");
+const syncLabel = document.getElementById("syncLabel");
 const passphraseInput = document.getElementById("passphraseInput");
 const togglePassphrase = document.getElementById("togglePassphrase");
 const authError = document.getElementById("authError");
@@ -156,9 +160,32 @@ function renderRecipeList() {
       item.classList.toggle("active", r.id === currentRecipeId);
       item.textContent = r.name;
       item.dataset.recipeId = r.id;
-      item.onclick = () => showRecipe(r.id);
+      item.onclick = () => {
+        showRecipe(r.id);
+        // The list is a fixed-height pane, so on a phone the recipe just tapped
+        // opens below it. Only on a real tap: a sync or a save re-renders the
+        // list too, and yanking the page then would be no-one's idea of helpful.
+        recipeDisplay.scrollIntoView({ behavior: "smooth", block: "start" });
+      };
       recipeList.appendChild(item);
     });
+
+  // The list scrolls internally, so its length is no longer visible from the
+  // page. Say how many there are, and how many the search is hiding.
+  const total = all.length;
+  // Pluralised on the total, not the match count, so a filtered list reads
+  // "0 of 1 recipe" rather than "0 of 1 recipes".
+  const noun = total === 1 ? "recipe" : "recipes";
+  listMeta.textContent = total === 0 ? ""
+    : keyword ? `${matches.length} of ${total} ${noun}`
+    : `${total} ${noun}`;
+
+  // Selecting from search, then clearing it, would otherwise leave the open
+  // recipe scrolled out of sight inside the pane.
+  const active = recipeList.querySelector(".active");
+  if (active && recipeList.scrollHeight > recipeList.clientHeight) {
+    active.scrollIntoView({ block: "nearest" });
+  }
 
   // Distinguish "you have nothing" from "nothing matched", because the useful
   // next action is different in each case.
@@ -400,12 +427,34 @@ function addIngredientField(ingredient = { name: '', amount: '', unit: '' }) {
 addIngredientFieldBtn.addEventListener('click', () => addIngredientField());
 
 // --- Add / edit ---
+
+// These messages used to go to the page banner, which the modal backdrop covers:
+// you could neither read the complaint nor dismiss it, and it was still sitting
+// there after you had fixed the field it was complaining about.
+function showRecipeError(message, field) {
+  recipeError.textContent = message;
+  recipeError.classList.remove("d-none");
+  field.classList.add("is-invalid");
+  field.focus();
+}
+
+function clearRecipeError() {
+  recipeError.classList.add("d-none");
+  recipeNameInput.classList.remove("is-invalid");
+  servingsInput.classList.remove("is-invalid");
+}
+
+// Typing is the fix, so typing is what clears the complaint.
+recipeNameInput.addEventListener("input", clearRecipeError);
+servingsInput.addEventListener("input", clearRecipeError);
+
 addRecipeBtn.addEventListener("click", () => {
   editingId = null;
   modalTitle.textContent = "Add Recipe";
   recipeNameInput.value = "";
   servingsInput.value = "";
   ingredientsFields.innerHTML = "";
+  clearRecipeError();
   addIngredientField();
   modal("recipeModal").show();
 });
@@ -418,6 +467,7 @@ editRecipeBtn.addEventListener("click", () => {
   recipeNameInput.value = r.name;
   servingsInput.value = r.servings;
   ingredientsFields.innerHTML = "";
+  clearRecipeError();
   r.ingredients.forEach(ing => addIngredientField(ing));
   if (r.ingredients.length === 0) addIngredientField();
   modal("recipeModal").show();
@@ -431,15 +481,14 @@ saveRecipeBtn.addEventListener("click", () => {
   // in the dropdown, and a blank servings count became NaN, serialised to null,
   // and scaled to Infinity.
   if (!name) {
-    recipeNameInput.focus();
-    notify("Give the recipe a name.", "warning");
+    showRecipeError("Give the recipe a name.", recipeNameInput);
     return;
   }
   if (!Number.isFinite(servings) || servings <= 0) {
-    servingsInput.focus();
-    notify("Set how many servings this recipe makes.", "warning");
+    showRecipeError("Set how many servings this recipe makes.", servingsInput);
     return;
   }
+  clearRecipeError();
 
   const ingredients = Array.from(ingredientsFields.querySelectorAll('.ingredient-row')).map(row => {
     const amount = parseFloat(row.querySelector('.ingredient-amount').value);
@@ -650,16 +699,29 @@ function renderAuthState() {
     authBtn.className = "btn btn-sm btn-outline-primary";
   }
 
+  // A glyph plus words, because on a phone there is only room for the glyph and
+  // the words are what pushed the header onto two lines.
   const waiting = sync.pending().length;
+  let glyph = "", label = "";
   if (!sync.signedIn()) {
-    syncStatus.textContent = "";
+    glyph = "";
+  } else if (waiting > 0 && sync.offline) {
+    glyph = "⚠";
+    label = `${waiting} not synced (offline)`;
   } else if (waiting > 0) {
-    syncStatus.textContent = sync.offline
-      ? `${waiting} not synced (offline)`
-      : `${waiting} syncing…`;
+    glyph = "↻";
+    label = `${waiting} syncing…`;
   } else {
-    syncStatus.textContent = "synced";
+    glyph = "✓";
+    label = "synced";
   }
+  syncGlyph.textContent = glyph;
+  syncLabel.textContent = label;
+  // The only thing a screen reader or a long-press has to go on when the words
+  // are hidden.
+  syncStatus.title = label;
+  syncStatus.setAttribute("aria-label", label);
+
   renderOwnershipControls();
 }
 
@@ -1004,7 +1066,7 @@ window.__app = {
   settleSignedOutRecipes, askAdoption, signInErrorMessage,
   showRecipe, showPublicRecipe, renderRecipeList, renderTrash, renderPublicList,
   renderAuthState, renderOwnershipControls, pullAndFlush,
-  clearSearch, notify, dismissBanner, modal, addIngredientField,
+  clearSearch, notify, dismissBanner, modal, addIngredientField, clearRecipeError,
   renderScaledIngredients, formatAmount, formatIngredient, applyTheme, activeTheme,
   get currentRecipeId() { return currentRecipeId; },
   get currentPublic() { return currentPublic; }

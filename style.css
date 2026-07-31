@@ -18,6 +18,53 @@ body {
   padding-bottom: 100px;
 }
 
+/* --- Header ---------------------------------------------------------------
+   Bootstrap's .navbar wraps by default, so "Sign out (somebody)" plus the sync
+   status was enough to push the controls onto their own line under the title.
+   Nothing wraps now: the row stays a row, and the title is what pays for it. */
+.navbar {
+  flex-wrap: nowrap;
+}
+
+.navbar-brand {
+  /* A flex item will not shrink below its content width without this, which is
+     what makes .text-truncate a no-op on its own here. The floor keeps the 🍳
+     visible however hard the row is squeezed. */
+  min-width: 2rem;
+  /* The title is what yields: you already know which app you are in, whereas
+     which account you are signed into is worth keeping legible. CSS cannot say
+     "exhaust this one before touching that one", but a 100:1 ratio is close
+     enough that the controls only start shrinking once the brand has run out. */
+  flex-shrink: 100;
+}
+
+#headerActions {
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+/* Truncating the name is still better than overflowing the bar. */
+#authBtn {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 575.98px) {
+  .navbar-brand {
+    font-size: 1rem;
+  }
+}
+
+/* --- Recipe list ----------------------------------------------------------
+   The list holds the whole collection, so at 20+ recipes it grew taller than
+   the screen and pushed the open recipe below the fold. Capped and scrolled in
+   place, the page is the same height whether there are three recipes or fifty. */
+#recipeList {
+  max-height: 45vh;
+  overflow-y: auto;
+}
+
 /* Brand colour. Bootstrap 5.3 drives its components from CSS variables, so the
    accent can be changed without recompiling or fighting specificity. The pink
    was already in the manifest and the app icon while every button was default
@@ -84,6 +131,7 @@ body {
   #addRecipeBtn,
   #banner,
   #recipeList,
+  #listMeta,
   #emptyState,
   #publicPanel,
   #trashPanel,

@@ -35,7 +35,7 @@ const { store, sync, migrate, newId, SCHEMA_VERSION, buildExportPayload,
         settleSignedOutRecipes, askAdoption, signInErrorMessage,
         showRecipe, showPublicRecipe, renderRecipeList, renderTrash, renderPublicList,
         renderAuthState, renderOwnershipControls, pullAndFlush,
-        clearSearch, notify, dismissBanner, modal, addIngredientField,
+        clearSearch, notify, dismissBanner, modal, addIngredientField, clearRecipeError,
         renderScaledIngredients, formatAmount, formatIngredient,
         applyTheme, activeTheme } = app;
 

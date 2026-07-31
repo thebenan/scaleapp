@@ -14,11 +14,18 @@
 </head>
 <body class="bg-light">
 
-  <!-- Header -->
+  <!-- Header. One row at every width: the brand gives up space before anything
+       wraps, because a wrapped navbar dropped the controls onto a second line as
+       soon as a signed-in name made the row too wide. -->
   <nav class="navbar navbar-light bg-white shadow-sm px-3 d-flex justify-content-between">
-    <span class="navbar-brand mb-0 h1">🍳 Recipe Scaler</span>
-    <span class="d-flex align-items-center gap-2">
-      <small id="syncStatus" class="text-muted"></small>
+    <span class="navbar-brand mb-0 h1 text-truncate">🍳 Recipe Scaler</span>
+    <span id="headerActions" class="d-flex align-items-center gap-2">
+      <!-- The glyph carries the state on a phone; the words appear once there is
+           room for them. -->
+      <small id="syncStatus" class="text-muted d-flex align-items-center gap-1">
+        <span id="syncGlyph" aria-hidden="true"></span>
+        <span id="syncLabel" class="d-none d-sm-inline"></span>
+      </small>
       <button id="themeBtn" class="btn btn-sm btn-outline-secondary" aria-label="Switch theme">🌙</button>
       <button id="authBtn" class="btn btn-sm btn-outline-primary">Sign in</button>
     </span>
@@ -43,6 +50,10 @@
         <button type="button" id="clearSearchBtn" class="btn btn-outline-secondary d-none"
                 aria-label="Clear search">&times;</button>
       </div>
+
+      <!-- Says how much is behind the scroll pane below, and how much of it the
+           current search is hiding. -->
+      <small id="listMeta" class="text-muted d-block mb-1"></small>
 
       <div id="recipeList" class="list-group"></div>
 
@@ -130,8 +141,13 @@
           <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
         </div>
         <div class="modal-body">
+          <!-- Validation belongs in here, like the sign-in error. The page-level
+               banner sits behind the modal backdrop, so a message there is both
+               invisible and impossible to dismiss without closing the dialog. -->
+          <div id="recipeError" class="alert alert-warning py-2 px-3 small d-none" role="alert"></div>
           <input type="text" id="recipeNameInput" class="form-control mb-2" placeholder="Recipe name">
-          <input type="number" id="servingsInput" class="form-control mb-2" placeholder="Number of Servings">
+          <input type="number" id="servingsInput" class="form-control mb-2" placeholder="Number of Servings"
+                 min="0" step="any" inputmode="decimal">
 
           <div id="ingredientsFields"></div>
           <button type="button" class="btn btn-outline-secondary btn-sm mb-2" id="addIngredientFieldBtn">+ Add Ingredient</button>
